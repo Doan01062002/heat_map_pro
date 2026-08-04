@@ -1,11 +1,11 @@
-﻿import { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { snapPointsBatch } from '../utils/osrmRouting';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 
-// â”€â”€ Shared popup helper â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── Shared popup helper ───────────────────────────────────────────────────────
 /**
- * showRoadStatsPopup â€” queries /api/road-stats and renders a Vietnamese popup.
+ * showRoadStatsPopup — queries /api/road-stats and renders a Vietnamese popup.
  * @param {object} map         MapLibre map instance
  * @param {object} popupLngLat {lng, lat} where to anchor the popup (click point)
  * @param {number} queryLat    lat for DB query (use orig GPS lat for dots)
@@ -16,12 +16,14 @@ async function showRoadStatsPopup(map, popupLngLat, queryLat, queryLng, hintDev)
   const zoom   = map.getZoom();
   const radius = zoom < 10 ? 300 : zoom < 12 ? 200 : zoom < 14 ? 150 : 100;
 
-  const loading = new map._maplibregl.Popup({ offset: 12, maxWidth: '270px' })
+  const PopupClass = map._maplibregl?.Popup || window.maplibregl?.Popup;
+
+  const loading = new PopupClass({ offset: 12, maxWidth: '270px' })
     .setLngLat(popupLngLat)
     .setHTML(`
       <div style="font-family:Inter,sans-serif;color:#333;font-size:13px;line-height:1.6">
-        <div style="font-weight:700;margin-bottom:4px">đŸ“ Äang táº£i thá»‘ng kĂªâ€¦</div>
-        ${hintDev != null ? `<div style="color:#e65100;font-size:11px">Äá»™ lá»‡ch: ${hintDev >= 1000 ? (hintDev/1000).toFixed(1)+' km' : Math.round(hintDev)+' m'}</div>` : ''}
+        <div style="font-weight:700;margin-bottom:4px">📍 Đang tải thống kê…</div>
+        ${hintDev != null ? `<div style="color:#e65100;font-size:11px">Độ lệch: ${hintDev >= 1000 ? (hintDev/1000).toFixed(1)+' km' : Math.round(hintDev)+' m'}</div>` : ''}
         <div style="color:#aaa;font-size:11px">${queryLat.toFixed(5)}, ${queryLng.toFixed(5)}</div>
       </div>
     `)
@@ -36,12 +38,12 @@ async function showRoadStatsPopup(map, popupLngLat, queryLat, queryLng, hintDev)
     loading.remove();
 
     if (!d.unique_trips) {
-      new map._maplibregl.Popup({ offset: 12, maxWidth: '240px' })
+      new PopupClass({ offset: 12, maxWidth: '240px' })
         .setLngLat(popupLngLat)
         .setHTML(`
           <div style="font-family:Inter,sans-serif;font-size:13px;color:#333">
-            <div style="font-weight:700;margin-bottom:4px">đŸ“ Khu vá»±c nĂ y</div>
-            <div style="color:#888">KhĂ´ng cĂ³ dá»¯ liá»‡u trong bĂ¡n kĂ­nh ${radius}m.</div>
+            <div style="font-weight:700;margin-bottom:4px">📍 Khu vực này</div>
+            <div style="color:#888">Không có dữ liệu trong bán kính ${radius}m.</div>
             <div style="color:#bbb;font-size:10px;margin-top:4px">${queryLat.toFixed(5)}, ${queryLng.toFixed(5)}</div>
           </div>
         `)
@@ -56,34 +58,34 @@ async function showRoadStatsPopup(map, popupLngLat, queryLat, queryLng, hintDev)
                  : d.avoid_ratio < 75 ? '#e17055' : '#d63031';
     const barW   = Math.min(100, Math.round(d.avoid_ratio));
 
-    new map._maplibregl.Popup({ offset: 12, maxWidth: '285px', closeButton: true })
+    new PopupClass({ offset: 12, maxWidth: '285px', closeButton: true })
       .setLngLat(popupLngLat)
       .setHTML(`
         <div style="font-family:Inter,system-ui,sans-serif;font-size:12.5px;color:#111;line-height:1.85">
-          <div style="font-weight:800;font-size:14px;margin-bottom:10px;color:#1a237e">đŸ›£ï¸ Thá»‘ng kĂª Ä‘oáº¡n Ä‘Æ°á»ng</div>
+          <div style="font-weight:800;font-size:14px;margin-bottom:10px;color:#1a237e">🛣️ Thống kê đoạn đường</div>
 
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;margin-bottom:10px">
             <div>
-              <div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">Tá»•ng lÆ°á»£t xe</div>
+              <div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">TỔNG LƯỢT XE</div>
               <div style="font-weight:700;font-size:18px;color:#1565c0">${d.unique_trips}</div>
             </div>
             <div>
-              <div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">TĂ i xáº¿</div>
+              <div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">TÀI XẾ</div>
               <div style="font-weight:700;font-size:18px;color:#6a1b9a">${d.unique_drivers}</div>
             </div>
             <div>
-              <div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">Äi Ä‘Ăºng Ä‘Æ°á»ng</div>
+              <div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">ĐI ĐÚNG ĐƯỜNG</div>
               <div style="font-weight:700;font-size:18px;color:#2e7d32">${d.normal_trips}</div>
             </div>
             <div>
-              <div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">NĂ© trĂ¡nh</div>
+              <div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">NÉ TRÁNH</div>
               <div style="font-weight:700;font-size:18px;color:#c62828">${d.high_dev_trips}</div>
             </div>
           </div>
 
           <div style="margin-bottom:9px">
             <div style="display:flex;justify-content:space-between;margin-bottom:3px">
-              <span style="color:#555;font-size:11px;font-weight:600">Tá»· lá»‡ nĂ© trĂ¡nh</span>
+              <span style="color:#555;font-size:11px;font-weight:600">Tỷ lệ né tránh</span>
               <b style="color:${iColor};font-size:13px">${ratio}%</b>
             </div>
             <div style="background:#e8e8e8;border-radius:6px;height:9px;overflow:hidden">
@@ -93,17 +95,17 @@ async function showRoadStatsPopup(map, popupLngLat, queryLat, queryLng, hintDev)
 
           <div style="border-top:1px solid #eee;padding-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px">
             <div>
-              <div style="color:#888;font-size:10px">Äá»™ lá»‡ch trung bĂ¬nh</div>
+              <div style="color:#888;font-size:10px">Độ lệch trung bình</div>
               <div style="font-weight:700;color:#e65100">${fmtDev(d.avg_deviation)}</div>
             </div>
             <div>
-              <div style="color:#888;font-size:10px">Äá»™ lá»‡ch tá»‘i Ä‘a</div>
+              <div style="color:#888;font-size:10px">Độ lệch tối đa</div>
               <div style="font-weight:700;color:#b71c1c">${fmtDev(d.max_deviation)}</div>
             </div>
           </div>
 
           <div style="margin-top:6px;color:#bbb;font-size:10px">
-            đŸ“Œ ${queryLat.toFixed(5)}, ${queryLng.toFixed(5)} Â· bĂ¡n kĂ­nh ${radius}m
+            📌 ${queryLat.toFixed(5)}, ${queryLng.toFixed(5)} · bán kính ${radius}m
           </div>
         </div>
       `)
@@ -117,20 +119,20 @@ async function showRoadStatsPopup(map, popupLngLat, queryLat, queryLng, hintDev)
 /**
  * HeatmapLayer:
  * 1. Smooth heatmap gradient (always visible, all zooms)
- * 2. At zoom â‰¥ 14: individual GPS dots SNAPPED to the nearest road
- *    via OSRM /nearest API â€” dots appear on road centerlines, not off-road
- * 3. Click anywhere on map â†’ Vietnamese stats popup via /api/road-stats
+ * 2. At zoom ≥ 14: individual GPS dots SNAPPED to the nearest road
+ *    via OSRM /nearest API — dots appear on road centerlines, not off-road
+ * 3. Click anywhere on map → Vietnamese stats popup via /api/road-stats
  * 4. Selected trip: planned route (blue dashed) + actual GPS route (orange)
  *
- * NO trajectory line layers â€” only dots and heatmap.
+ * NO trajectory line layers — only dots and heatmap.
  */
 export default function HeatmapLayer({ map, points = [], selectedTrip = null }) {
   const initialized   = useRef(false);
   const clickHandler  = useRef(null);
-  const snapCache     = useRef(new Map()); // key: "lng,lat" â†’ snapped [lng,lat]
+  const snapCache     = useRef(new Map()); // key: "lng,lat" → snapped [lng,lat]
   const snapPending   = useRef(false);
 
-  // â”€â”€ Heatmap + dot layers + click handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Heatmap + dot layers + click handler ──────────────────────────────────
   useEffect(() => {
     if (!map || points.length === 0) return;
 
@@ -156,7 +158,7 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
         data: { type: 'FeatureCollection', features: [] },
       });
 
-      // â”€â”€ Smooth heatmap (no maxzoom) â”€â”€
+      // ── Smooth heatmap (no maxzoom) ──
       map.addLayer({
         id: 'hm-heat',
         type: 'heatmap',
@@ -183,7 +185,7 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
         },
       });
 
-      // â”€â”€ Invisible click-detection layer over heatmap â”€â”€
+      // ── Invisible click-detection layer over heatmap ──
       map.addLayer({
         id: 'hm-hover',
         type: 'circle',
@@ -195,7 +197,7 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
         },
       });
 
-      // â”€â”€ Snapped dots: colored by deviation, visible at zoom â‰¥ 14 â”€â”€
+      // ── Snapped dots: colored by deviation, visible at zoom ≥ 14 ──
       map.addLayer({
         id: 'hm-snapped-dots',
         type: 'circle',
@@ -211,7 +213,7 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
         },
       });
 
-      // â”€â”€ Snap visible dots when map moves at high zoom â”€â”€
+      // ── Snap visible dots when map moves at high zoom ──
       const onMoveEnd = async () => {
         const zoom = map.getZoom();
         if (zoom < 14 || snapPending.current) return;
@@ -246,7 +248,7 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
           }
         }
 
-        // Build snapped GeoJSON from cache â€” store original coords for click query
+        // Build snapped GeoJSON from cache — store original coords for click query
         const snappedFeatures = toSnap
           .filter(p => snapCache.current.has(p.key))
           .map(p => ({
@@ -266,7 +268,7 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
       map.on('moveend', onMoveEnd);
       map.on('zoomend', onMoveEnd);
 
-      // â”€â”€ Click on snapped dot â†’ show road stats popup (uses original GPS coords) â”€â”€
+      // ── Click on snapped dot → show road stats popup (uses original GPS coords) ──
       map.on('click', 'hm-snapped-dots', async (e) => {
         e.originalEvent.stopPropagation(); // prevent general map click from also firing
         if (!e.features?.length) return;
@@ -280,7 +282,7 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
         await showRoadStatsPopup(map, e.lngLat, lat, lng, dev);
       });
 
-      // â”€â”€ General map click â†’ Vietnamese road stats (areas without dots) â”€â”€
+      // ── General map click → Vietnamese road stats (areas without dots) ──
       const onMapClick = async (e) => {
         // Skip trip route layers
         for (const layer of ['trip-actual', 'trip-planned']) {
@@ -309,7 +311,7 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
     }
   }, [map, points]);
 
-  // â”€â”€ Selected trip route overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Selected trip route overlay ───────────────────────────────────────────
   useEffect(() => {
     if (!map || !initialized.current) return;
 
@@ -326,6 +328,8 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
 
     const actualCoords  = matchedRoute || coords;
     const plannedCoords = plannedRoute || [coords[0], coords[coords.length - 1]];
+
+    const PopupClass = map._maplibregl?.Popup || window.maplibregl?.Popup;
 
     map.addSource('trip-planned-src', {
       type: 'geojson',
@@ -382,7 +386,7 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
     );
   }, [map, selectedTrip]);
 
-  // â”€â”€ Cleanup â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // ── Cleanup ───────────────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
       if (!map || !initialized.current) return;
@@ -399,4 +403,3 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
 
   return null;
 }
-
