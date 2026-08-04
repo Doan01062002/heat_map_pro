@@ -113,28 +113,130 @@ function haversineDistance(c1, c2) {
 }
 
 /**
- * cleanGpsTrace — Remove GPS outliers that jump too far from the trajectory.
- * If a point is >500m from both its predecessor and successor, it's an outlier.
+ * perpDistance — Perpendicular distance from point P to line A→B (in meters).
+ * Used by Douglas-Peucker algorithm.
+ */
+function perpDistance(p, a, b) {
+  // If A and B are the same point, return distance A→P
+  const dAB = haversineDistance(a, b);
+  if (dAB < 1) return haversineDistance(a, p);
+
+  // Use cross-track distance formula (simplified for short distances)
+  const dAP = haversineDistance(a, p);
+  const dBP = haversineDistance(b, p);
+
+  // Heron's formula for triangle area → height = perpendicular distance
+  const s = (dAB + dAP + dBP) / 2;
+  const area = Math.sqrt(Math.max(0, s * (s - dAB) * (s - dAP) * (s - dBP)));
+  return (2 * area) / dAB;
+}
+
+/**
+ * douglasPeucker — Simplify a polyline by removing points that don't
+ * significantly change the shape. Keeps the overall path but removes
+ * micro-oscillations and near-collinear points.
  *
  * @param {Array<[number,number]>} coords
+ * @param {number} tolerance  max allowed distance from simplified line (meters)
  * @returns {Array<[number,number]>}
+ */
+function douglasPeucker(coords, tolerance = 25) {
+  if (coords.length <= 2) return coords;
+
+  // Find point furthest from the line start→end
+  let maxDist = 0;
+  let maxIdx  = 0;
+  const first = coords[0];
+  const last  = coords[coords.length - 1];
+
+  for (let i = 1; i < coords.length - 1; i++) {
+    const d = perpDistance(coords[i], first, last);
+    if (d > maxDist) {
+      maxDist = d;
+      maxIdx  = i;
+    }
+  }
+
+  if (maxDist > tolerance) {
+    // Recursively simplify both halves
+    const left  = douglasPeucker(coords.slice(0, maxIdx + 1), tolerance);
+    const right = douglasPeucker(coords.slice(maxIdx), tolerance);
+    return [...left.slice(0, -1), ...right];
+  } else {
+    // All intermediate points are within tolerance → keep only endpoints
+    return [first, last];
+  }
+}
+
+/**
+ * cleanGpsTrace — Comprehensive GPS trace simplification pipeline.
+ *
+ * Steps:
+ *   1. Remove near-duplicate points (< 30m from previous)
+ *   2. Remove outliers (> 500m from both neighbors)
+ *   3. Remove U-turn loops (returns within 80m of a point 2-4 steps back)
+ *   4. Douglas-Peucker simplification (25m tolerance)
+ *
+ * @param {Array<[number,number]>} coords  [lng,lat][]
+ * @returns {Array<[number,number]>}  simplified trace
  */
 function cleanGpsTrace(coords) {
   if (coords.length <= 3) return coords;
 
-  const cleaned = [coords[0]]; // always keep first
-
-  for (let i = 1; i < coords.length - 1; i++) {
-    const dPrev = haversineDistance(coords[i-1], coords[i]);
-    const dNext = haversineDistance(coords[i], coords[i+1]);
-    // If point jumps >500m from both neighbors → likely GPS glitch
-    if (dPrev > 500 && dNext > 500) continue;
-    cleaned.push(coords[i]);
+  // Step 1: Remove near-duplicates (< 30m apart)
+  let pass1 = [coords[0]];
+  for (let i = 1; i < coords.length; i++) {
+    if (haversineDistance(pass1[pass1.length - 1], coords[i]) >= 30) {
+      pass1.push(coords[i]);
+    }
+  }
+  // Always keep last point
+  if (pass1[pass1.length - 1] !== coords[coords.length - 1]) {
+    pass1.push(coords[coords.length - 1]);
   }
 
-  cleaned.push(coords[coords.length - 1]); // always keep last
-  return cleaned;
+  // Step 2: Remove outliers (> 500m from both neighbors)
+  let pass2 = [pass1[0]];
+  for (let i = 1; i < pass1.length - 1; i++) {
+    const dPrev = haversineDistance(pass1[i - 1], pass1[i]);
+    const dNext = haversineDistance(pass1[i], pass1[i + 1]);
+    if (!(dPrev > 500 && dNext > 500)) {
+      pass2.push(pass1[i]);
+    }
+  }
+  pass2.push(pass1[pass1.length - 1]);
+
+  // Step 3: Remove U-turn loops
+  // If point i is within 80m of point i-3 or i-4, the vehicle likely
+  // circled back — remove intermediate points to avoid OSRM creating loops
+  let pass3 = [pass2[0]];
+  for (let i = 1; i < pass2.length; i++) {
+    let isLoop = false;
+    // Check if current point is very close to a point 2-4 steps back
+    for (let lookback = 2; lookback <= Math.min(4, pass3.length); lookback++) {
+      const prevPt = pass3[pass3.length - lookback];
+      if (prevPt && haversineDistance(prevPt, pass2[i]) < 80) {
+        isLoop = true;
+        break;
+      }
+    }
+    if (!isLoop) {
+      pass3.push(pass2[i]);
+    }
+  }
+  // Ensure last point
+  if (pass3[pass3.length - 1] !== pass2[pass2.length - 1]) {
+    pass3.push(pass2[pass2.length - 1]);
+  }
+
+  // Step 4: Douglas-Peucker simplification (25m tolerance)
+  const simplified = douglasPeucker(pass3, 25);
+
+  console.log(`[cleanGpsTrace] ${coords.length} → dedup:${pass1.length} → outlier:${pass2.length} → uloop:${pass3.length} → DP:${simplified.length}`);
+
+  return simplified;
 }
+
 
 // ── Road-Following Route ─────────────────────────────────────────────────────
 
