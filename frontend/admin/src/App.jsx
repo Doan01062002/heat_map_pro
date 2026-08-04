@@ -225,19 +225,19 @@ export default function App() {
             </div>
             <div style={{ borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '20px' }}>
               {selectedTrip.osrmLoading ? (
-                <div style={{ color: '#666', fontSize: '11px' }}>⏳ Map matching…</div>
+                <div style={{ color: '#666', fontSize: '11px' }}>⏳ Đang map matching…</div>
               ) : (
                 <div style={{ fontSize: '12px', lineHeight: 1.8 }}>
                   <div>
                     <span style={{ color: '#29b6f6', marginRight: '6px' }}>━━ ╌ ╌</span>
                     <span style={{ color: '#aaa' }}>
-                      {selectedTrip.plannedRoute ? 'Planned route (OSRM)' : 'Planned (fallback)'}
+                      {selectedTrip.plannedRoute ? 'Tuyến dự kiến (OSRM)' : 'Tuyến dự kiến (fallback)'}
                     </span>
                   </div>
                   <div>
                     <span style={{ color: '#ff6b35', marginRight: '6px' }}>━━━</span>
-                    <span style={{ color: '#aaa' }}>
-                      {selectedTrip.matchedRoute ? 'Actual route (map matched)' : 'Actual (raw GPS)'}
+                    <span style={{ color: selectedTrip.matchedRoute ? '#4caf50' : '#ff9800' }}>
+                      {selectedTrip.matchedRoute ? '✓ Đường đi thực tế (map matched)' : '⚠ Đường đi thực tế (raw GPS)'}
                     </span>
                   </div>
                 </div>

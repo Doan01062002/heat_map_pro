@@ -3,10 +3,11 @@
  *
  * Map Matching: Snaps GPS traces to road network (chunked for long trips)
  * Routing: Planned route via intermediate waypoints (not just start→end)
+ * Nearest: Snap single point to nearest road
  */
 
 const OSRM_BASE = 'https://router.project-osrm.org';
-const TIMEOUT_MS = 12000;
+const TIMEOUT_MS = 15000;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -21,7 +22,7 @@ function sample(arr, n) {
 
 /** Build an OSRM coordinate string */
 function coordStr(coords) {
-  return coords.map(([lng, lat]) => `${lng.toFixed(6)},${lat.toFixed(6)}`).join(';');
+  return coords.map(c => `${c[0].toFixed(6)},${c[1].toFixed(6)}`).join(';');
 }
 
 /** Fetch with timeout */
@@ -39,17 +40,29 @@ async function fetchWithTimeout(url) {
 // ── Map Matching ──────────────────────────────────────────────────────────────
 
 /**
- * matchChunk — Match a single chunk of ≤100 coordinates to the road network.
+ * matchChunk — Match a single chunk of coordinates to the road network.
+ * OSRM /match has a limit of 100 coordinates per request.
+ * Uses radius=50m (good for typical GPS error of taxi data).
  * Returns matched coordinates or null.
  */
 async function matchChunk(coords) {
   if (coords.length < 2) return null;
-  const radii = coords.map(() => '25').join(';');
-  const url = `${OSRM_BASE}/match/v1/driving/${coordStr(coords)}`
+
+  // Limit to 100 points per OSRM constraint
+  const limited = coords.length > 100 ? sample(coords, 100) : coords;
+
+  // 50m radius covers typical GPS drift for urban taxi data
+  const radii = limited.map(() => '50').join(';');
+  const url = `${OSRM_BASE}/match/v1/driving/${coordStr(limited)}`
     + `?overview=full&geometries=geojson&gaps=ignore&radiuses=${radii}`;
+
   try {
     const data = await fetchWithTimeout(url);
-    if (data.code !== 'Ok' || !data.matchings?.length) return null;
+    if (data.code !== 'Ok' || !data.matchings?.length) {
+      console.warn('[OSRM match] no match, code:', data.code, data.message);
+      return null;
+    }
+    // Combine all matching segments into one coordinate array
     return data.matchings.flatMap(m => m.geometry.coordinates);
   } catch (err) {
     console.warn('[OSRM match chunk]', err.message);
@@ -59,7 +72,11 @@ async function matchChunk(coords) {
 
 /**
  * matchTripToRoads — Snaps full GPS trace to roads.
- * Automatically chunks long trips into overlapping 80-point segments.
+ * Automatically chunks long trips into overlapping segments.
+ * Strategy:
+ *   - ≤ 100 points: single call
+ *   - 100-500 points: sample to 100 then single call
+ *   - > 500 points: chunk into 80-point segments with 10-point overlap
  *
  * @param {Array<[number,number]>} rawCoords  [lng,lat][]
  * @returns {Promise<Array<[number,number]>|null>}
@@ -67,38 +84,44 @@ async function matchChunk(coords) {
 export async function matchTripToRoads(rawCoords) {
   if (!rawCoords || rawCoords.length < 2) return null;
 
-  const CHUNK_SIZE = 80;
-  const OVERLAP    = 8;
-
   // Short trip — single call
-  if (rawCoords.length <= CHUNK_SIZE) {
+  if (rawCoords.length <= 100) {
     return matchChunk(rawCoords);
   }
 
-  // Long trip — sample first then try single call; if that fails, chunk
-  const sampled = sample(rawCoords, CHUNK_SIZE);
-  const single  = await matchChunk(sampled);
-  if (single) return single;
+  // Medium trip — sample down to 100 points
+  if (rawCoords.length <= 500) {
+    const sampled = sample(rawCoords, 100);
+    return matchChunk(sampled);
+  }
 
-  // Chunk approach: split raw coords into overlapping segments
+  // Long trip — chunk approach
+  const CHUNK_SIZE = 80;
+  const OVERLAP    = 10;
   const chunks = [];
   for (let i = 0; i < rawCoords.length; i += (CHUNK_SIZE - OVERLAP)) {
-    chunks.push(rawCoords.slice(i, Math.min(i + CHUNK_SIZE, rawCoords.length)));
-    if (i + CHUNK_SIZE >= rawCoords.length) break;
+    const end = Math.min(i + CHUNK_SIZE, rawCoords.length);
+    chunks.push(rawCoords.slice(i, end));
+    if (end >= rawCoords.length) break;
   }
 
   // Run chunks sequentially to avoid rate-limit
   const results = [];
   for (const chunk of chunks) {
     results.push(await matchChunk(chunk));
-    await new Promise(r => setTimeout(r, 150)); // small delay
+    await new Promise(r => setTimeout(r, 200));
   }
 
-  // Merge, skip overlap points from subsequent chunks
+  // Merge, skip overlap from subsequent chunks
   const merged = [];
   for (let i = 0; i < results.length; i++) {
     if (!results[i]) continue;
-    merged.push(...(i === 0 ? results[i] : results[i].slice(OVERLAP)));
+    if (i === 0) {
+      merged.push(...results[i]);
+    } else {
+      // Skip first few points (overlap region) to avoid duplicates
+      merged.push(...results[i].slice(Math.min(20, results[i].length)));
+    }
   }
   return merged.length >= 2 ? merged : null;
 }
@@ -107,8 +130,8 @@ export async function matchTripToRoads(rawCoords) {
 
 /**
  * getPlannedRoute — Computes the optimal driving route via intermediate waypoints.
- * Uses 8 evenly-spaced GPS points as route hints so the planned path follows roads
- * through the same general area (not just a straight start→end line).
+ * Uses up to 10 evenly-spaced GPS points as route hints so the planned path
+ * follows roads through the same general corridor.
  *
  * @param {Array<[number,number]>} rawCoords  [lng,lat][]
  * @returns {Promise<Array<[number,number]>|null>}
@@ -116,8 +139,8 @@ export async function matchTripToRoads(rawCoords) {
 export async function getPlannedRoute(rawCoords) {
   if (!rawCoords || rawCoords.length < 2) return null;
 
-  // Use up to 8 waypoints: start, ~6 intermediates, end
-  const waypoints = sample(rawCoords, Math.min(rawCoords.length, 8));
+  // Use up to 10 waypoints: start, ~8 intermediates, end
+  const waypoints = sample(rawCoords, Math.min(rawCoords.length, 10));
 
   const url = `${OSRM_BASE}/route/v1/driving/${coordStr(waypoints)}`
     + `?overview=full&geometries=geojson`;
@@ -147,7 +170,7 @@ export async function snapPointToRoad(lng, lat) {
   try {
     const data = await fetchWithTimeout(url);
     if (data.code !== 'Ok' || !data.waypoints?.length) return null;
-    return data.waypoints[0].location; // [lng, lat] already snapped to road
+    return data.waypoints[0].location;
   } catch {
     return null;
   }
@@ -170,9 +193,8 @@ export async function snapPointsBatch(coords, concurrency = 6) {
     );
     batchResults.forEach((r, j) => { results[i + j] = r; });
     if (i + concurrency < coords.length) {
-      await new Promise(res => setTimeout(res, 120)); // small delay between batches
+      await new Promise(res => setTimeout(res, 120));
     }
   }
   return results;
 }
-
