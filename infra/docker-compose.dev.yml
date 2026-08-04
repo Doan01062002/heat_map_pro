@@ -1,0 +1,36 @@
+# ==============================================================================
+# Docker Compose — Development Overrides
+# ==============================================================================
+# Usage: docker compose -f infra/docker-compose.yml -f infra/docker-compose.dev.yml up
+# ==============================================================================
+
+services:
+  # Expose PostgreSQL port for local dev tools (pgAdmin, DBeaver)
+  postgres:
+    ports:
+      - "5432:5432"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # Expose Redis port for local debugging (redis-cli)
+  redis:
+    ports:
+      - "6379:6379"
+
+  # Expose OSRM port for direct API testing
+  osrm:
+    ports:
+      - "5000:5000"
+
+  # In dev mode, backend runs locally (not in Docker)
+  # so we disable it here
+  backend:
+    profiles:
+      - docker-only
+
+  # Nginx is not needed in dev — Vite dev servers handle routing
+  nginx:
+    profiles:
+      - docker-only

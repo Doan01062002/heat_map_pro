@@ -1,0 +1,190 @@
+# ==============================================================================
+# Docker Compose — Real-Time Driver Deviation Heatmap (Production)
+# ==============================================================================
+# Usage:  docker compose -f infra/docker-compose.yml --env-file .env up -d --build
+# ==============================================================================
+
+services:
+  # --------------------------------------------------------------------------
+  # OSRM Map-Matching Engine (C++)
+  # --------------------------------------------------------------------------
+  osrm:
+    image: osrm/osrm-backend:latest
+    container_name: heatmap-osrm
+    restart: unless-stopped
+    command: >
+      osrm-routed
+        --algorithm mld
+        --max-matching-size 5000
+        --max-table-size 1000
+        /data/${OSRM_MAP_FILE:-vietnam-latest}.osrm
+    volumes:
+      - osrm-data:/data
+    networks:
+      - heatmap-net
+    deploy:
+      resources:
+        limits:
+          memory: 400M
+          cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/nearest/v1/driving/106.7,10.78"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # --------------------------------------------------------------------------
+  # PostgreSQL + PostGIS (History Storage)
+  # --------------------------------------------------------------------------
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: heatmap-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-heatmap}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-heatmap_secret_2024}
+      POSTGRES_DB: ${POSTGRES_DB:-heatmap_db}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    networks:
+      - heatmap-net
+    deploy:
+      resources:
+        limits:
+          memory: 800M
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-heatmap} -d ${POSTGRES_DB:-heatmap_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # --------------------------------------------------------------------------
+  # Redis (In-Memory Pub/Sub + Cache)
+  # --------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: heatmap-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+        --maxmemory 200mb
+        --maxmemory-policy allkeys-lru
+        --appendonly no
+        --save ""
+    networks:
+      - heatmap-net
+    deploy:
+      resources:
+        limits:
+          memory: 200M
+          cpus: "0.25"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # --------------------------------------------------------------------------
+  # Go Backend Service
+  # --------------------------------------------------------------------------
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: heatmap-backend
+    restart: unless-stopped
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - BACKEND_PORT=${BACKEND_PORT:-8080}
+      - BACKEND_HOST=0.0.0.0
+      - OSRM_URL=http://osrm:5000
+      - OSRM_MATCH_TIMEOUT_MS=${OSRM_MATCH_TIMEOUT_MS:-500}
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_CHANNEL=${REDIS_CHANNEL:-heatmap:updates}
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-heatmap}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-heatmap_secret_2024}
+      - POSTGRES_DB=${POSTGRES_DB:-heatmap_db}
+      - POSTGRES_SSLMODE=disable
+      - H3_RESOLUTION=${H3_RESOLUTION:-8}
+      - FLUSH_INTERVAL_REDIS_MS=${FLUSH_INTERVAL_REDIS_MS:-1000}
+      - FLUSH_INTERVAL_POSTGRES_S=${FLUSH_INTERVAL_POSTGRES_S:-30}
+      - BBOX_BUFFER_METERS=${BBOX_BUFFER_METERS:-50}
+      - DEVIATION_THRESHOLD_METERS=${DEVIATION_THRESHOLD_METERS:-50}
+    depends_on:
+      osrm:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - heatmap-net
+    deploy:
+      resources:
+        limits:
+          memory: 100M
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # --------------------------------------------------------------------------
+  # Nginx Reverse Proxy (Single Entry Point)
+  # --------------------------------------------------------------------------
+  nginx:
+    image: nginx:alpine
+    container_name: heatmap-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - simulator-dist:/usr/share/nginx/simulator:ro
+      - admin-dist:/usr/share/nginx/admin:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - heatmap-net
+    deploy:
+      resources:
+        limits:
+          memory: 50M
+          cpus: "0.25"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+# ==============================================================================
+# Networks
+# ==============================================================================
+networks:
+  heatmap-net:
+    driver: bridge
+
+# ==============================================================================
+# Volumes
+# ==============================================================================
+volumes:
+  osrm-data:
+    driver: local
+  postgres-data:
+    driver: local
+  simulator-dist:
+    driver: local
+  admin-dist:
+    driver: local

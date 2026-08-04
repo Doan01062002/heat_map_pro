@@ -1,0 +1,28 @@
+{
+  "name": "heatmap-admin-dashboard",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Admin Heatmap Dashboard — Real-time 3D deviation heatmap visualization",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 3002",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "@deck.gl/core": "^9.1.3",
+    "@deck.gl/react": "^9.1.3",
+    "@deck.gl/geo-layers": "^9.1.3",
+    "@deck.gl/layers": "^9.1.3",
+    "maplibre-gl": "^4.7.1",
+    "h3-js": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^6.0.5"
+  }
+}

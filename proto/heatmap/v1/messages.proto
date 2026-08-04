@@ -1,0 +1,68 @@
+// ==============================================================================
+// Protobuf Schema — Real-Time Driver Deviation Heatmap
+// ==============================================================================
+// This is the SINGLE SOURCE OF TRUTH for all message formats.
+// After editing, regenerate code:
+//   Go:  cd backend && make proto
+//   JS:  Frontend uses protobufjs to load this .proto file directly
+// ==============================================================================
+
+syntax = "proto3";
+
+package heatmap.v1;
+
+option go_package = "heatmap/v1;heatmapv1";
+
+// ==============================================================================
+// Messages: Simulator → Backend
+// ==============================================================================
+
+// GPSPoint represents a single GPS reading from a simulated driver.
+message GPSPoint {
+  string driver_id = 1;    // Unique driver identifier (e.g., "d-001")
+  string trip_id   = 2;    // Current trip identifier
+  double latitude  = 3;    // WGS84 latitude (-90 to 90)
+  double longitude = 4;    // WGS84 longitude (-180 to 180)
+  int64  timestamp = 5;    // Unix timestamp in milliseconds
+  float  heading   = 6;    // Bearing in degrees (0-360)
+  float  speed     = 7;    // Speed in km/h
+}
+
+// GPSBatch is sent from the simulator every 3 seconds.
+// Contains GPS readings from one or more drivers.
+message GPSBatch {
+  repeated GPSPoint points = 1;
+}
+
+// TripRoute is sent once when a trip starts to register the planned route.
+message TripRoute {
+  string            trip_id   = 1;   // Trip identifier
+  string            driver_id = 2;   // Driver identifier
+  repeated Waypoint waypoints = 3;   // Ordered waypoints of the planned route
+}
+
+// Waypoint is a single point on a planned route.
+message Waypoint {
+  double latitude  = 1;
+  double longitude = 2;
+}
+
+// ==============================================================================
+// Messages: Backend → Admin Dashboard
+// ==============================================================================
+
+// HeatmapCell represents one hexagonal cell on the heatmap.
+message HeatmapCell {
+  string h3_index     = 1;  // H3 cell index (Resolution 8, e.g., "882830828bfffff")
+  uint32 intensity    = 2;  // Deviation count (higher = more deviations)
+  int64  last_updated = 3;  // Unix timestamp (ms) of the last deviation in this cell
+}
+
+// HeatmapUpdate is pushed to admin clients every 1 second.
+// Contains only cells that changed since the last update (delta).
+message HeatmapUpdate {
+  repeated HeatmapCell cells            = 1;  // Updated cells (delta)
+  int64                server_timestamp = 2;  // Server time (ms)
+  uint32               total_drivers    = 3;  // Currently active driver count
+  uint32               total_deviations = 4;  // Total deviations in this window
+}

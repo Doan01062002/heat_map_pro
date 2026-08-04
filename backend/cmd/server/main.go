@@ -1,0 +1,157 @@
+// Package main is the entry point for the heatmap backend server.
+// It wires all dependencies together and starts the HTTP/WebSocket server.
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/heat-map-pro/backend/internal/aggregator"
+	"github.com/heat-map-pro/backend/internal/config"
+	"github.com/heat-map-pro/backend/internal/filter"
+	"github.com/heat-map-pro/backend/internal/ingestion"
+	"github.com/heat-map-pro/backend/internal/persistence"
+	"github.com/heat-map-pro/backend/internal/publisher"
+	"github.com/heat-map-pro/backend/internal/spatial"
+	"github.com/heat-map-pro/backend/internal/websocket"
+)
+
+func main() {
+	// ---- Load Configuration ----
+	cfg, err := config.Load()
+	if err != nil {
+		slog.Error("failed to load config", "error", err)
+		os.Exit(1)
+	}
+
+	// ---- Setup Logger ----
+	logLevel := slog.LevelInfo
+	switch cfg.LogLevel {
+	case "debug":
+		logLevel = slog.LevelDebug
+	case "warn":
+		logLevel = slog.LevelWarn
+	case "error":
+		logLevel = slog.LevelError
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
+	slog.SetDefault(logger)
+
+	slog.Info("starting heatmap backend",
+		"env", cfg.AppEnv,
+		"port", cfg.BackendPort,
+		"h3_resolution", cfg.H3Resolution,
+	)
+
+	// ---- Create Root Context (for graceful shutdown) ----
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// ---- Initialize Dependencies ----
+
+	// 1. Spatial Indexer
+	h3Indexer := spatial.NewH3Indexer(cfg.H3Resolution)
+
+	// 2. Lock-Free Aggregator
+	agg := aggregator.New()
+
+	// 3. OSRM Client
+	osrmClient := filter.NewOSRMClient(cfg.OSRMURL, time.Duration(cfg.OSRMMatchTimeoutMS)*time.Millisecond)
+
+	// 4. Bounding Box Filter
+	bboxFilter := filter.NewBoundingBoxFilter(cfg.BBoxBufferMeters)
+
+	// 5. Redis Publisher (1s flush)
+	redisPub, err := publisher.NewRedisPublisher(ctx, cfg)
+	if err != nil {
+		slog.Error("failed to connect to Redis", "error", err)
+		os.Exit(1)
+	}
+	defer redisPub.Close()
+
+	// 6. PostgreSQL Persistence (30s flush)
+	pgWriter, err := persistence.NewPostgresWriter(ctx, cfg)
+	if err != nil {
+		slog.Error("failed to connect to PostgreSQL", "error", err)
+		os.Exit(1)
+	}
+	defer pgWriter.Close()
+
+	// 7. Admin WebSocket Hub
+	wsHub := websocket.NewHub(ctx, cfg)
+
+	// 8. Ingestion Handler (wires filter → spatial → aggregator)
+	ingestHandler := ingestion.NewHandler(bboxFilter, osrmClient, h3Indexer, agg, cfg)
+
+	// ---- Start Background Workers ----
+	go redisPub.StartFlushLoop(ctx, agg, time.Duration(cfg.FlushIntervalRedisMS)*time.Millisecond)
+	go pgWriter.StartFlushLoop(ctx, agg, time.Duration(cfg.FlushIntervalPostgresS)*time.Second)
+	go wsHub.StartSubscriber(ctx) // Subscribes to Redis and broadcasts to admin clients
+
+	// ---- Setup HTTP Routes ----
+	mux := http.NewServeMux()
+
+	// Health check
+	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"status":"healthy","uptime_seconds":%d}`, int(time.Since(time.Now()).Seconds()))
+	})
+
+	// Trip registration
+	mux.HandleFunc("POST /api/trips", ingestHandler.RegisterTrip)
+
+	// Historical heatmap query
+	mux.HandleFunc("GET /api/history", pgWriter.HandleHistoryQuery)
+
+	// Driver deviation events query
+	mux.HandleFunc("GET /api/deviations", pgWriter.HandleDeviationsQuery)
+
+	// WebSocket: Driver GPS ingestion
+	mux.HandleFunc("/ws/driver", ingestHandler.HandleWebSocket)
+
+	// WebSocket: Admin heatmap stream
+	mux.HandleFunc("/ws/admin", wsHub.HandleWebSocket)
+
+	// ---- Start HTTP Server ----
+	addr := fmt.Sprintf("%s:%d", cfg.BackendHost, cfg.BackendPort)
+	server := &http.Server{
+		Addr:         addr,
+		Handler:      mux,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	// Start server in a goroutine
+	go func() {
+		slog.Info("HTTP server listening", "addr", addr)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("HTTP server error", "error", err)
+			cancel()
+		}
+	}()
+
+	// ---- Graceful Shutdown ----
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+
+	slog.Info("shutting down gracefully...")
+	cancel()
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		slog.Error("HTTP server shutdown error", "error", err)
+	}
+
+	slog.Info("server stopped")
+}
