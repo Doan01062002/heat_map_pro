@@ -62,8 +62,27 @@ export default function App() {
     }
   };
 
-  // Auto-load Porto data on mount
-  useEffect(() => { fetchHistory(PORTO_FROM, PORTO_TO); }, []);
+  const [fetchError, setFetchError] = useState(null);
+
+  // Auto-load Porto data on mount — retry up to 3 times if backend not ready
+  useEffect(() => {
+    let retries = 0;
+    const tryFetch = async () => {
+      try {
+        await fetchHistory(PORTO_FROM, PORTO_TO);
+        setFetchError(null);
+      } catch (err) {
+        if (retries < 3) {
+          retries++;
+          setTimeout(tryFetch, 2000 * retries);
+        } else {
+          setFetchError('Không thể kết nối backend. Hãy refresh trang sau khi backend đã khởi động.');
+        }
+      }
+    };
+    tryFetch();
+  }, []);
+
 
   // Handle trip selection — immediately show raw GPS, then upgrade to OSRM-matched route
   const handleSelectTrip = async (trip) => {
@@ -144,9 +163,37 @@ export default function App() {
               borderRadius: '16px', padding: '28px 36px', textAlign: 'center', color: '#e0e0ff',
             }}>
               <div style={{ fontSize: '32px', marginBottom: '12px' }}>⏳</div>
-              <div style={{ fontSize: '16px', fontWeight: 700 }}>Loading data…</div>
-              <div style={{ fontSize: '12px', color: '#666', marginTop: '6px' }}>Fetching GPS points & trajectories</div>
+              <div style={{ fontSize: '16px', fontWeight: 700 }}>Đang tải dữ liệu…</div>
+              <div style={{ fontSize: '12px', color: '#666', marginTop: '6px' }}>Fetching 75,000 GPS points & 1,977 trajectories</div>
             </div>
+          </div>
+        )}
+
+        {/* No-data notice with reload button */}
+        {!historyLoading && historyPoints.length === 0 && (
+          <div style={{
+            position: 'absolute', top: '50%', left: '50%',
+            transform: 'translate(-50%,-50%)',
+            background: 'rgba(15,12,41,0.95)',
+            border: '1px solid rgba(255,100,100,0.3)',
+            borderRadius: '16px', padding: '28px 36px', textAlign: 'center', color: '#e0e0ff',
+            zIndex: 20, minWidth: '280px',
+          }}>
+            <div style={{ fontSize: '32px', marginBottom: '12px' }}>⚠️</div>
+            <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '8px' }}>Chưa có dữ liệu</div>
+            <div style={{ fontSize: '12px', color: '#666', marginBottom: '16px' }}>
+              {fetchError || 'Backend đang khởi động hoặc chưa có data.'}
+            </div>
+            <button
+              onClick={() => fetchHistory(PORTO_FROM, PORTO_TO)}
+              style={{
+                padding: '10px 24px', borderRadius: '10px', border: 'none', cursor: 'pointer',
+                background: 'linear-gradient(135deg,#6c63ff,#4834d4)', color: '#fff',
+                fontSize: '14px', fontWeight: 700,
+              }}
+            >
+              🔄 Tải lại dữ liệu
+            </button>
           </div>
         )}
 
