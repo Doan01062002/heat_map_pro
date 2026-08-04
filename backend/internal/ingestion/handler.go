@@ -12,7 +12,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/heat-map-pro/backend/internal/config"
-	"google.golang.org/protobuf/proto"
 
 	heatmapv1 "github.com/heat-map-pro/backend/gen/heatmap/v1"
 )
@@ -124,8 +123,9 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if messageType != websocket.BinaryMessage {
-			slog.Warn("unexpected message type, expected binary", "type", messageType)
+		// Accept both TextMessage (JSON) and BinaryMessage (future Protobuf)
+		if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
+			slog.Warn("unexpected message type", "type", messageType)
 			continue
 		}
 
@@ -133,11 +133,13 @@ func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// processGPSBatch decodes a Protobuf GPSBatch and runs each point through the filter pipeline.
+// processGPSBatch decodes a JSON GPSBatch and runs each point through the filter pipeline.
+// NOTE: Currently uses JSON encoding. When protoc is available, switch to proto.Unmarshal
+// for ~10x smaller messages in production.
 func (h *Handler) processGPSBatch(ctx context.Context, data []byte) {
 	var batch heatmapv1.GPSBatch
-	if err := proto.Unmarshal(data, &batch); err != nil {
-		slog.Error("protobuf unmarshal failed", "error", err)
+	if err := json.Unmarshal(data, &batch); err != nil {
+		slog.Error("json unmarshal failed", "error", err)
 		return
 	}
 
