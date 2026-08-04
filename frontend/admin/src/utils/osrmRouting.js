@@ -351,106 +351,154 @@ async function routeChunkNoBearings(coords) {
 }
 
 /**
- * matchTripToRoads — Snaps a full GPS trace to the road network.
+ * matchTripToRoads — Snaps a GPS trace to road network using OSRM /match HMM.
  *
- * Pipeline:
- *   1. Clean GPS trace (dedup <30m, outliers >500m, U-turns, DP simplify)
- *   2. H3 spatial indexing → convert GPS to H3 cell centers at res 11 (~25m)
- *      Each unique H3 cell = 1 waypoint; consecutive duplicates merged
- *   3. Pairwise OSRM routing: route A→B, B→C, ... (no all-in-one = no loops)
- *   4. Stitch segments into final route
+ * Strategy (researched + tested against public OSRM server limits):
+ *   - /match API uses Hidden Markov Model: considers ALL GPS points together,
+ *     finds the most LIKELY sequence of roads — unlike /route which just finds
+ *     the shortest path between two arbitrary waypoints.
+ *   - Public server limit: max 10 points per /match request, radius ≤ 40m
+ *   - Solution: chunk GPS into groups of 10 with 2-point overlap, stitch results
+ *   - Use timestamps (15s intervals = Porto dataset) for HMM transition scoring
+ *   - tidy=true: OSRM cleans internal GPS noise before matching
+ *   - gaps=ignore: bridge gaps without splitting the trace
  *
  * @param {Array<[number,number]>} rawCoords  [lng,lat][]
+ * @param {number} [intervalSeconds=15]  GPS sampling interval (Porto = 15s)
  * @returns {Promise<Array<[number,number]>|null>}
  */
-export async function matchTripToRoads(rawCoords) {
+export async function matchTripToRoads(rawCoords, intervalSeconds = 15) {
   if (!rawCoords || rawCoords.length < 2) return null;
 
-  // Step 1: Clean GPS trace (dedup, outliers, U-turns, DP at 25m)
-  const cleaned = cleanGpsTrace(rawCoords);
+  // Step 1: Remove only hard outliers (>500m from both neighbors = GPS glitch).
+  // Keep mild noise — the HMM in /match handles it better than we ever could.
+  const cleaned = removeOutliers(rawCoords);
+  if (cleaned.length < 2) return null;
 
-  // Step 2: H3 spatial indexing → extract key waypoints
-  // Resolution 11 (~25m cells): merges GPS noise in same cell → 1 waypoint
-  // Use resolution 10 (~65m) if trace is very dense to get fewer waypoints
-  let h3Waypoints = gpsToH3Waypoints(cleaned, H3_RESOLUTION);
+  // Step 2: Sample to ≤100 points to limit total API calls.
+  // Porto trips average 60-80 GPS points → usually no sampling needed.
+  const sampled = cleaned.length > 100
+    ? sample(cleaned, 100)
+    : cleaned;
 
-  // If H3 gives too many (>30), use coarser resolution
-  if (h3Waypoints.length > 30) {
-    h3Waypoints = gpsToH3Waypoints(cleaned, H3_RESOLUTION - 1); // res 10 = ~65m
+  console.log(`[matchTripToRoads] ${rawCoords.length} raw → ${cleaned.length} cleaned → ${sampled.length} sampled`);
+
+  // Step 3: Chunk into groups of 10 with 2-point overlap.
+  // /match limit: 10 coords max, radius ≤ 40m on public server.
+  // Overlap ensures route continuity at chunk boundaries.
+  const CHUNK_SIZE = 10;
+  const OVERLAP    = 2;
+  const chunks     = [];
+  for (let i = 0; i < sampled.length; i += CHUNK_SIZE - OVERLAP) {
+    const end = Math.min(i + CHUNK_SIZE, sampled.length);
+    chunks.push(sampled.slice(i, end));
+    if (end >= sampled.length) break;
   }
 
-  // Fallback: if H3 gives too few, use sampled cleaned points
-  let waypoints;
-  if (h3Waypoints.length < 2) {
-    waypoints = sample(cleaned, Math.min(cleaned.length, 10));
-  } else {
-    waypoints = h3Waypoints;
-  }
-
-  console.log(`[matchTripToRoads] ${rawCoords.length} raw → ${cleaned.length} cleaned → H3(res${H3_RESOLUTION}):${h3Waypoints.length} → ${waypoints.length} waypoints`);
-
-  if (waypoints.length < 2) return null;
-
-  // Step 3: Snap each H3 waypoint to nearest ROAD NODE
-  // This is critical: H3 cell centers may be off-road (sidewalk, park, building).
-  // OSRM /nearest snaps them to the actual road network → routing becomes accurate.
-  console.log(`[matchTripToRoads] Snapping ${waypoints.length} waypoints to road network...`);
-  const SNAP_BATCH = 5; // snap 5 in parallel
-  const snapped = [];
-  for (let i = 0; i < waypoints.length; i += SNAP_BATCH) {
-    const batch = waypoints.slice(i, i + SNAP_BATCH).map(snapToNearestRoad);
-    const results = await Promise.all(batch);
-    snapped.push(...results);
-    if (i + SNAP_BATCH < waypoints.length) {
-      await new Promise(r => setTimeout(r, 100));
-    }
-  }
-  console.log(`[matchTripToRoads] ${snapped.length} waypoints snapped to roads`);
-
-  // Step 4: Remove snapped duplicates (two H3 cells may snap to same road node)
-  const dedupedSnapped = [snapped[0]];
-  for (let i = 1; i < snapped.length; i++) {
-    const prev = dedupedSnapped[dedupedSnapped.length - 1];
-    if (haversineDistance(prev, snapped[i]) > 20) { // > 20m apart
-      dedupedSnapped.push(snapped[i]);
-    }
-  }
-  console.log(`[matchTripToRoads] After snap dedup: ${dedupedSnapped.length} waypoints`);
-
-  if (dedupedSnapped.length < 2) return null;
-
-  // Step 5: Pairwise routing WITH bearing constraints
-  // Each A→B pair: bearing computed from A to B constrains OSRM
-  // to roads matching travel direction → rejects parallel/opposite roads.
-  const segments = [];
-  const ROUTE_BATCH = 3; // 3 pairs in parallel (bearing calls are slightly heavier)
-
-  for (let i = 0; i < dedupedSnapped.length - 1; i += ROUTE_BATCH) {
-    const batch = [];
-    for (let j = i; j < Math.min(i + ROUTE_BATCH, dedupedSnapped.length - 1); j++) {
-      batch.push(routePairWithBearing(dedupedSnapped[j], dedupedSnapped[j + 1]));
-    }
-    const results = await Promise.all(batch);
-    segments.push(...results);
-    if (i + ROUTE_BATCH < dedupedSnapped.length - 1) {
-      await new Promise(r => setTimeout(r, 150));
-    }
-  }
-
-  // Step 6: Stitch segments (skip duplicate junction point at each join)
-  const merged = [];
-  for (let i = 0; i < segments.length; i++) {
-    if (!segments[i] || segments[i].length === 0) continue;
-    if (merged.length === 0) {
-      merged.push(...segments[i]);
+  // Step 4: Match each chunk via /match HMM, sequentially to respect rate limits.
+  // Each chunk gets synthetic timestamps: 0, 15, 30, ... seconds
+  const matchedSegments = [];
+  let failCount = 0;
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const chunk = chunks[ci];
+    const matched = await matchChunk(chunk, intervalSeconds);
+    if (matched) {
+      matchedSegments.push(matched);
     } else {
-      merged.push(...segments[i].slice(1));
+      failCount++;
+      // Fallback for this chunk: pairwise /route between first and last point
+      console.warn(`[matchTripToRoads] chunk ${ci} /match failed → using /route fallback`);
+      const fallback = await routePairNoBearing(chunk[0], chunk[chunk.length - 1]);
+      if (fallback) matchedSegments.push(fallback);
+    }
+    // Throttle between chunks: 200ms gap to avoid rate-limiting
+    if (ci < chunks.length - 1) {
+      await new Promise(r => setTimeout(r, 200));
     }
   }
 
-  console.log(`[matchTripToRoads] ${segments.length} segments → ${merged.length} total coords`);
+  if (matchedSegments.length === 0) return null;
+
+  // Step 5: Stitch segments together.
+  // Skip first OVERLAP coords of each segment (they overlap with previous chunk).
+  const merged = [];
+  for (let i = 0; i < matchedSegments.length; i++) {
+    const seg = matchedSegments[i];
+    if (!seg || seg.length === 0) continue;
+    if (merged.length === 0) {
+      merged.push(...seg);
+    } else {
+      // Skip the first ~(OVERLAP) points to avoid doubling the junction
+      const skip = Math.min(OVERLAP, Math.floor(seg.length * 0.15));
+      merged.push(...seg.slice(skip));
+    }
+  }
+
+  console.log(`[matchTripToRoads] ${chunks.length} chunks, ${failCount} fallbacks → ${merged.length} final coords`);
   return merged.length >= 2 ? merged : null;
 }
+
+/**
+ * removeOutliers — Lightweight pass: only remove GPS points that are
+ * clearly impossible (>500m from BOTH neighbors = satellite glitch).
+ * Keep all other noise — OSRM HMM handles it.
+ */
+function removeOutliers(coords) {
+  if (coords.length <= 3) return coords;
+  const out = [coords[0]];
+  for (let i = 1; i < coords.length - 1; i++) {
+    const dPrev = haversineDistance(coords[i - 1], coords[i]);
+    const dNext = haversineDistance(coords[i], coords[i + 1]);
+    if (!(dPrev > 500 && dNext > 500)) out.push(coords[i]);
+  }
+  out.push(coords[coords.length - 1]);
+  return out;
+}
+
+/**
+ * matchChunk — Send a chunk of ≤10 GPS points to OSRM /match HMM API.
+ * Uses synthetic timestamps (15s intervals) and radius=40m.
+ *
+ * @param {Array<[number,number]>} coords  [lng,lat][] — max 10 points
+ * @param {number} intervalSeconds  time gap between consecutive GPS points
+ * @returns {Promise<Array<[number,number]>|null>}
+ */
+async function matchChunk(coords, intervalSeconds = 15) {
+  if (coords.length < 2) return null;
+
+  const coordPart    = coordStr(coords);
+  const radiusPart   = coords.map(() => '40').join(';');
+  // Synthetic timestamps starting at 0, incrementing by intervalSeconds
+  const tsPart       = coords.map((_, i) => i * intervalSeconds).join(';');
+
+  const url = `${OSRM_BASE}/match/v1/driving/${coordPart}`
+    + `?overview=full&geometries=geojson`
+    + `&radiuses=${radiusPart}`
+    + `&timestamps=${tsPart}`
+    + `&tidy=true&gaps=ignore`;
+
+  try {
+    const data = await fetchWithTimeout(url);
+    if (data.code !== 'Ok' || !data.matchings?.length) {
+      console.warn('[matchChunk] failed:', data.code, data.message);
+      return null;
+    }
+    // Merge all matchings (gaps=ignore may still produce multiple matchings)
+    const allCoords = [];
+    for (const m of data.matchings) {
+      if (allCoords.length === 0) {
+        allCoords.push(...m.geometry.coordinates);
+      } else {
+        allCoords.push(...m.geometry.coordinates.slice(1));
+      }
+    }
+    return allCoords;
+  } catch (err) {
+    console.warn('[matchChunk] error:', err.message);
+    return null;
+  }
+}
+
 
 /**
  * snapToNearestRoad — Snap a coordinate to the nearest road node
