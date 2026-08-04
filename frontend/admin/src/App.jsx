@@ -146,7 +146,6 @@ export default function App() {
       <div style={{ flex: 1, position: 'relative' }}>
         <MapContainer
           points={activePoints}
-          trajectories={mode === 'history' ? historyTrajectories : []}
           selectedTrip={selectedTrip}
         />
 

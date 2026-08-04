@@ -131,3 +131,48 @@ export async function getPlannedRoute(rawCoords) {
     return null;
   }
 }
+
+// ── Nearest Road Snap ─────────────────────────────────────────────────────────
+
+/**
+ * snapPointToRoad — Snaps a single [lng, lat] coordinate to the nearest road.
+ * Uses OSRM /nearest/v1/driving endpoint.
+ *
+ * @param {number} lng
+ * @param {number} lat
+ * @returns {Promise<[number,number]|null>}  snapped [lng,lat] or null on failure
+ */
+export async function snapPointToRoad(lng, lat) {
+  const url = `${OSRM_BASE}/nearest/v1/driving/${lng.toFixed(6)},${lat.toFixed(6)}?number=1`;
+  try {
+    const data = await fetchWithTimeout(url);
+    if (data.code !== 'Ok' || !data.waypoints?.length) return null;
+    return data.waypoints[0].location; // [lng, lat] already snapped to road
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * snapPointsBatch — Snap an array of [lng,lat] coords to roads in batches.
+ * Limits concurrency to avoid rate-limiting on OSRM public server.
+ *
+ * @param {Array<[number,number]>} coords
+ * @param {number} concurrency  max parallel requests (default 6)
+ * @returns {Promise<Array<[number,number]|null>>}
+ */
+export async function snapPointsBatch(coords, concurrency = 6) {
+  const results = new Array(coords.length).fill(null);
+  for (let i = 0; i < coords.length; i += concurrency) {
+    const batch = coords.slice(i, i + concurrency);
+    const batchResults = await Promise.all(
+      batch.map(([lng, lat]) => snapPointToRoad(lng, lat))
+    );
+    batchResults.forEach((r, j) => { results[i + j] = r; });
+    if (i + concurrency < coords.length) {
+      await new Promise(res => setTimeout(res, 120)); // small delay between batches
+    }
+  }
+  return results;
+}
+
