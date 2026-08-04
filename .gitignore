@@ -67,3 +67,19 @@ docker-compose.override.yml
 *.log
 tmp/
 scratch/
+
+# ========================
+# Large Dataset Files (>100MB — too large for GitHub)
+# Use Git LFS or store externally
+# ========================
+*.csv.zip
+*.parquet
+*.zip
+train.csv
+train.csv.zip
+
+# ========================
+# Compiled scripts binaries
+# ========================
+scripts/*.exe
+scripts/replay_porto
