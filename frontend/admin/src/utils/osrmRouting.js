@@ -1,20 +1,28 @@
 /**
  * osrmRouting.js — OSRM Public API utilities.
  *
- * Road-Following Route: Snaps GPS traces to road network via /route API
- *   with BEARING constraints to prevent zigzagging between parallel roads.
- * Planned Route: Optimal driving route via intermediate waypoints
- * Nearest: Snap single point to nearest road
+ * Road-Following Route: Snaps GPS traces to road network via /route API.
+ *   Uses H3 spatial indexing to extract clean waypoints from noisy GPS.
+ * Planned Route: Optimal driving route via intermediate waypoints.
+ * Nearest: Snap single point to nearest road.
  *
- * KEY INSIGHT: Porto taxi GPS is sparse (15s intervals). When GPS points
- * fall near parallel roads (highway + service road), OSRM without bearings
- * will zigzag between them. By computing the bearing (heading direction)
- * from each GPS point to the next, we constrain OSRM to only use roads
- * that match the vehicle's actual direction of travel.
+ * H3 APPROACH for actual route:
+ *   - Convert GPS points → H3 cells at resolution 11 (~25m hexagons)
+ *   - Deduplicate: consecutive GPS noise in same cell → 1 waypoint
+ *   - Use H3 cell CENTERS as waypoints → grid-aligned, consistent
+ *   - Route between consecutive cell centers pairwise → no loops
+ *
+ * BEARING: each pair uses the heading from A→B to constrain OSRM
+ *   to roads matching the vehicle's travel direction.
  */
 
-const OSRM_BASE = 'https://router.project-osrm.org';
+import { latLngToCell, cellToLatLng } from 'h3-js';
+
+const OSRM_BASE  = 'https://router.project-osrm.org';
 const TIMEOUT_MS = 15000;
+// H3 resolution 11 = ~25m hexagons — fine enough for urban routing,
+// coarse enough to merge nearby GPS noise into one waypoint.
+const H3_RESOLUTION = 11;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -46,7 +54,63 @@ async function fetchWithTimeout(url) {
   }
 }
 
-// ── Bearing Calculation ──────────────────────────────────────────────────────
+// ── H3-Based Waypoint Extraction ─────────────────────────────────────────────
+
+/**
+ * gpsToH3Waypoints — Convert a GPS trace to H3 cell centers.
+ *
+ * How it works:
+ *   1. Each GPS [lng,lat] → H3 cell at resolution 11 (~25m hexagon)
+ *   2. Consecutive duplicate cells (GPS noise in same spot) → merged into 1
+ *   3. Cell CENTER coordinates returned as [lng,lat] waypoints
+ *
+ * Why H3 helps:
+ *   - GPS noise (±5-20m) often falls in same H3 cell → natural dedup
+ *   - Cell centers lie on a consistent hexagonal grid → no random jitter
+ *   - Reduces 200+ GPS points to ~15-30 key turn points
+ *   - Can later compare actual vs planned routes by H3 cell overlap
+ *
+ * @param {Array<[number,number]>} coords  [lng,lat][] raw GPS
+ * @param {number} resolution  H3 resolution (default 11 = ~25m)
+ * @returns {Array<[number,number]>}  [lng,lat][] of unique H3 cell centers
+ */
+function gpsToH3Waypoints(coords, resolution = H3_RESOLUTION) {
+  const waypoints = [];
+  let prevCell = null;
+
+  for (const [lng, lat] of coords) {
+    const cell = latLngToCell(lat, lng, resolution);  // h3-js: (lat, lng, res)
+    if (cell !== prevCell) {
+      const [cellLat, cellLng] = cellToLatLng(cell);  // h3-js returns [lat, lng]
+      waypoints.push([cellLng, cellLat]);              // convert back to [lng, lat]
+      prevCell = cell;
+    }
+  }
+
+  return waypoints;
+}
+
+/**
+ * computeH3Overlap — Given actual GPS and planned route coords,
+ * compute what % of the actual route overlaps with the planned route
+ * by comparing H3 cells at resolution 10 (~65m hexagons).
+ *
+ * Useful for deviation analysis: 0% = completely different roads,
+ * 100% = exact same roads.
+ *
+ * @param {Array<[number,number]>} actualCoords   [lng,lat][]
+ * @param {Array<[number,number]>} plannedCoords  [lng,lat][]
+ * @param {number} resolution  H3 resolution for comparison (default 10)
+ * @returns {{ overlapRatio: number, actualCells: Set, plannedCells: Set }}
+ */
+export function computeH3Overlap(actualCoords, plannedCoords, resolution = 10) {
+  const actualCells  = new Set(actualCoords.map(([lng, lat]) => latLngToCell(lat, lng, resolution)));
+  const plannedCells = new Set(plannedCoords.map(([lng, lat]) => latLngToCell(lat, lng, resolution)));
+  const shared = [...actualCells].filter(c => plannedCells.has(c)).length;
+  const overlapRatio = actualCells.size > 0 ? shared / actualCells.size : 0;
+  return { overlapRatio, actualCells, plannedCells };
+}
+
 
 /**
  * calcBearing — Compute the compass bearing from point A to point B.
@@ -290,9 +354,11 @@ async function routeChunkNoBearings(coords) {
  * matchTripToRoads — Snaps a full GPS trace to the road network.
  *
  * Pipeline:
- *   1. Clean GPS trace (remove outliers >500m from neighbors)
- *   2. Sample to manageable waypoint count
- *   3. Route via OSRM with bearing constraints
+ *   1. Clean GPS trace (dedup <30m, outliers >500m, U-turns, DP simplify)
+ *   2. H3 spatial indexing → convert GPS to H3 cell centers at res 11 (~25m)
+ *      Each unique H3 cell = 1 waypoint; consecutive duplicates merged
+ *   3. Pairwise OSRM routing: route A→B, B→C, ... (no all-in-one = no loops)
+ *   4. Stitch segments into final route
  *
  * @param {Array<[number,number]>} rawCoords  [lng,lat][]
  * @returns {Promise<Array<[number,number]>|null>}
@@ -300,32 +366,35 @@ async function routeChunkNoBearings(coords) {
 export async function matchTripToRoads(rawCoords) {
   if (!rawCoords || rawCoords.length < 2) return null;
 
-  // Step 1: Clean GPS trace (dedup, outliers, U-turns, simplify)
+  // Step 1: Clean GPS trace (dedup, outliers, U-turns, DP at 25m)
   const cleaned = cleanGpsTrace(rawCoords);
 
-  // Step 2: Aggressively select KEY WAYPOINTS only (major direction changes)
-  // Use Douglas-Peucker with large tolerance (150m) to keep only significant turns
-  const keyPoints = douglasPeucker(cleaned, 150);
+  // Step 2: H3 spatial indexing → extract key waypoints
+  // Resolution 11 (~25m cells): merges GPS noise in same cell → 1 waypoint
+  // Use resolution 10 (~65m) if trace is very dense to get fewer waypoints
+  let h3Waypoints = gpsToH3Waypoints(cleaned, H3_RESOLUTION);
 
-  // Ensure we have a reasonable number of waypoints (5-25)
-  let waypoints;
-  if (keyPoints.length > 25) {
-    waypoints = sample(keyPoints, 25);
-  } else if (keyPoints.length < 3 && cleaned.length >= 3) {
-    // Too few key points — use sampled cleaned points
-    waypoints = sample(cleaned, Math.min(cleaned.length, 10));
-  } else {
-    waypoints = keyPoints;
+  // If H3 gives too many (>30), use coarser resolution
+  if (h3Waypoints.length > 30) {
+    h3Waypoints = gpsToH3Waypoints(cleaned, H3_RESOLUTION - 1); // res 10 = ~65m
   }
 
-  console.log(`[matchTripToRoads] ${rawCoords.length} raw → ${cleaned.length} cleaned → ${keyPoints.length} key → ${waypoints.length} waypoints`);
+  // Fallback: if H3 gives too few, use sampled cleaned points
+  let waypoints;
+  if (h3Waypoints.length < 2) {
+    waypoints = sample(cleaned, Math.min(cleaned.length, 10));
+  } else {
+    waypoints = h3Waypoints;
+  }
+
+  console.log(`[matchTripToRoads] ${rawCoords.length} raw → ${cleaned.length} cleaned → H3(res${H3_RESOLUTION}):${h3Waypoints.length} → ${waypoints.length} waypoints`);
 
   if (waypoints.length < 2) return null;
 
   // Step 3: Pairwise segment routing
   // Route each consecutive PAIR of waypoints separately:
   //   A→B, B→C, C→D, ...
-  // Each pair = simple 2-point route → no loops possible!
+  // Each pair = simple 2-point route → NO loops possible!
   const segments = [];
   const BATCH_SIZE = 4;  // process 4 pairs in parallel to speed up
   

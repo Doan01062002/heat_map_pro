@@ -1,0 +1,18 @@
+{
+  "name": "heat-map-pro",
+  "version": "1.0.0",
+  "description": "Real-Time Driver Deviation Heatmap — monorepo start script",
+  "private": true,
+  "scripts": {
+    "start": "concurrently --kill-others-on-fail --prefix-colors \"bgBlue.bold,bgGreen.bold,bgMagenta.bold\" --names \"BACKEND,ADMIN,SIMULATOR\" \"npm run start:backend\" \"npm run start:admin\" \"npm run start:simulator\"",
+    "start:backend": "cd backend && .\\heatmap-server.exe",
+    "start:admin": "cd frontend/admin && npm run dev",
+    "start:simulator": "cd frontend/simulator && npm run dev",
+    "install:all": "cd frontend/admin && npm install && cd ../simulator && npm install",
+    "build:backend": "cd backend && go build -o heatmap-server.exe ./cmd/server",
+    "build:all": "npm run build:backend && cd frontend/admin && npm run build && cd ../simulator && npm run build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}
