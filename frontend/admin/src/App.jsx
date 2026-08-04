@@ -3,7 +3,7 @@ import MapContainer from './components/MapContainer';
 import FilterPanel from './components/FilterPanel';
 import StatsOverlay from './components/StatsOverlay';
 import { useHeatmapStream } from './hooks/useHeatmapStream';
-import { matchTripToRoads, getPlannedRoute } from './utils/osrmRouting';
+import { matchTripToRoads, getPlannedRoute, computeH3Overlap } from './utils/osrmRouting';
 
 const PORTO_FROM = 1372636800000; // 2013-07-01
 const PORTO_TO   = 1377907200000; // 2013-08-31
@@ -108,8 +108,23 @@ export default function App() {
         getPlannedRoute(trip.coords),           // pass full coords for intermediate waypoints
       ]);
 
+      const actualRoute = matched || trip.coords;
+      const plannedRoute = planned || [trip.coords[0], trip.coords[trip.coords.length - 1]];
+
+      let avoidanceRatio = 0;
+      if (actualRoute && plannedRoute) {
+        const { overlapRatio } = computeH3Overlap(actualRoute, plannedRoute, 10);
+        avoidanceRatio = Math.max(0, Math.min(100, Math.round((1 - overlapRatio) * 100)));
+      }
+
       setSelectedTrip(prev => prev?.trip_id === trip.trip_id
-        ? { ...prev, matchedRoute: matched, plannedRoute: planned, osrmLoading: false }
+        ? {
+            ...prev,
+            matchedRoute: matched,
+            plannedRoute: planned,
+            avoidanceRatio,
+            osrmLoading: false
+          }
         : prev
       );
     } catch (err) {
@@ -221,6 +236,16 @@ export default function App() {
               <div style={{ color: '#555', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Avg Deviation</div>
               <div style={{ color: '#ff6b35', fontWeight: 700, fontSize: '13px' }}>
                 {(selectedTrip.avg_deviation / 1000).toFixed(1)} km
+              </div>
+            </div>
+            <div>
+              <div style={{ color: '#555', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Tỷ lệ né tránh</div>
+              <div style={{
+                color: selectedTrip.avoidanceRatio > 50 ? '#ff2244' : selectedTrip.avoidanceRatio > 20 ? '#ff8800' : '#4caf50',
+                fontWeight: 700,
+                fontSize: '13px'
+              }}>
+                {selectedTrip.osrmLoading ? '…' : `${selectedTrip.avoidanceRatio ?? 0}%`}
               </div>
             </div>
             <div style={{ borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '20px' }}>
