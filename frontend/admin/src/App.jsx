@@ -227,9 +227,9 @@ export default function App() {
               {selectedTrip.osrmLoading ? (
                 <div style={{ color: '#666', fontSize: '11px' }}>⏳ Đang map matching…</div>
               ) : (
-                <div style={{ fontSize: '12px', lineHeight: 1.8 }}>
+                <div style={{ fontSize: '11.5px', lineHeight: 2 }}>
                   <div>
-                    <span style={{ color: '#29b6f6', marginRight: '6px' }}>━━ ╌ ╌</span>
+                    <span style={{ color: '#29b6f6', marginRight: '6px' }}>━ ╌ ━</span>
                     <span style={{ color: '#aaa' }}>
                       {selectedTrip.plannedRoute ? 'Tuyến dự kiến (OSRM)' : 'Tuyến dự kiến (fallback)'}
                     </span>
@@ -237,7 +237,21 @@ export default function App() {
                   <div>
                     <span style={{ color: '#ff6b35', marginRight: '6px' }}>━━━</span>
                     <span style={{ color: selectedTrip.matchedRoute ? '#4caf50' : '#ff9800' }}>
-                      {selectedTrip.matchedRoute ? '✓ Đường đi thực tế (map matched)' : '⚠ Đường đi thực tế (raw GPS)'}
+                      {selectedTrip.matchedRoute ? '✓ Đường thực tế (map matched)' : '⚠ Đường thực tế (raw GPS)'}
+                    </span>
+                  </div>
+                  <div>
+                    <span style={{ color: '#e040fb', marginRight: '6px' }}>━━━</span>
+                    <span style={{ color: '#aaa' }}>Đoạn trùng nhau</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '12px', marginTop: '2px' }}>
+                    <span>
+                      <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: '#00e676', border: '2px solid #fff', verticalAlign: 'middle', marginRight: 4 }} />
+                      <span style={{ color: '#aaa', fontSize: '10.5px' }}>Điểm đầu</span>
+                    </span>
+                    <span>
+                      <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: '#ff1744', border: '2px solid #fff', verticalAlign: 'middle', marginRight: 4 }} />
+                      <span style={{ color: '#aaa', fontSize: '10.5px' }}>Điểm cuối</span>
                     </span>
                   </div>
                 </div>
