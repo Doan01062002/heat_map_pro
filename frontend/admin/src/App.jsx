@@ -82,12 +82,9 @@ export default function App() {
 
     // Step 2: Fetch OSRM map matching + planned route in parallel
     try {
-      const start = trip.coords[0];
-      const end   = trip.coords[trip.coords.length - 1];
-
       const [matched, planned] = await Promise.all([
         matchTripToRoads(trip.coords),
-        getPlannedRoute(start, end),
+        getPlannedRoute(trip.coords),           // pass full coords for intermediate waypoints
       ]);
 
       setSelectedTrip(prev => prev?.trip_id === trip.trip_id
