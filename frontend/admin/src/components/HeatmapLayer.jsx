@@ -1,19 +1,20 @@
 import { useEffect, useRef } from 'react';
 
 /**
- * HeatmapLayer — Pure smooth gradient heatmap using MapLibre native heatmap type.
- * NO trajectory lines — only the density gradient following road patterns.
+ * HeatmapLayer — Three visualization modes:
  *
- * When a trip is selected, shows:
- *  - Actual GPS path (orange line)
- *  - Planned straight-line route (dashed blue)
- *  - GPS points along the route
+ * 1. Background heatmap: smaller radius, tighter kernel → follows road density
+ * 2. Road-snapped actual route: orange line (OSRM map-matched GPS)
+ * 3. Planned route: blue dashed line (OSRM optimal route)
  */
-export default function HeatmapLayer({ map, points = [], selectedTrip = null }) {
+export default function HeatmapLayer({
+  map,
+  points = [],
+  selectedTrip = null,
+}) {
   const initialized = useRef(false);
-  const tripLayersAdded = useRef(false);
 
-  // ── Main heatmap effect ────────────────────────────────────────────────────
+  // ── Heatmap layer ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!map || points.length === 0) return;
 
@@ -33,59 +34,58 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
     if (!initialized.current) {
       map.addSource('hm-points', { type: 'geojson', data: geojson });
 
-      // Smooth heatmap — full zoom range
       map.addLayer({
         id: 'hm-heat',
         type: 'heatmap',
         source: 'hm-points',
         maxzoom: 18,
         paint: {
+          // Weight by deviation distance
           'heatmap-weight': [
             'interpolate', ['linear'], ['get', 'deviation'],
-            0, 0, 500, 0.15, 5000, 0.4, 50000, 0.75, 200000, 1.0,
+            0, 0, 1000, 0.1, 10000, 0.35, 80000, 0.7, 200000, 1.0,
           ],
+          // Zoom-dependent intensity — keep relatively subtle
           'heatmap-intensity': [
             'interpolate', ['linear'], ['zoom'],
-            6, 0.5, 9, 1.0, 12, 1.8, 15, 2.8,
+            6, 0.3,
+            9, 0.5,
+            12, 0.9,
+            14, 1.2,
+            17, 1.5,
           ],
+          // ★ KEY FIX: much smaller radius → tighter blobs that follow roads
           'heatmap-radius': [
             'interpolate', ['linear'], ['zoom'],
-            6, 8, 9, 18, 11, 28, 13, 40, 15, 55, 17, 70,
+            6,  4,
+            8,  6,
+            10, 10,
+            12, 14,
+            14, 20,
+            16, 28,
+            18, 38,
           ],
+          // Color ramp: transparent → teal → green → yellow → orange → red
           'heatmap-color': [
             'interpolate', ['linear'], ['heatmap-density'],
             0,    'rgba(0,0,0,0)',
-            0.08, 'rgba(0,220,100,0.0)',
-            0.18, 'rgba(0,220,80,0.6)',
-            0.32, 'rgba(100,230,0,0.7)',
-            0.48, 'rgba(210,240,0,0.75)',
-            0.64, 'rgba(255,190,0,0.82)',
-            0.80, 'rgba(255,100,0,0.88)',
-            0.92, 'rgba(255,30,0,0.94)',
+            0.05, 'rgba(0,180,120,0)',
+            0.15, 'rgba(0,220,80,0.65)',
+            0.30, 'rgba(100,230,0,0.72)',
+            0.50, 'rgba(220,240,0,0.78)',
+            0.68, 'rgba(255,180,0,0.84)',
+            0.84, 'rgba(255,80,0,0.90)',
+            0.95, 'rgba(255,20,0,0.95)',
             1.0,  'rgba(200,0,0,1.0)',
           ],
+          // Slightly transparent so roads are visible underneath
           'heatmap-opacity': [
             'interpolate', ['linear'], ['zoom'],
-            8, 0.92, 14, 0.80, 17, 0.65,
+            7,  0.88,
+            12, 0.80,
+            15, 0.70,
+            18, 0.60,
           ],
-        },
-      });
-
-      // Individual dots at high zoom only
-      map.addLayer({
-        id: 'hm-dots',
-        type: 'circle',
-        source: 'hm-points',
-        minzoom: 15,
-        paint: {
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 15, 3, 18, 7],
-          'circle-color': [
-            'interpolate', ['linear'], ['get', 'deviation'],
-            0, '#00ff80', 5000, '#ffff00', 30000, '#ff8800', 100000, '#ff0040',
-          ],
-          'circle-opacity': 0.85,
-          'circle-stroke-width': 1,
-          'circle-stroke-color': 'rgba(255,255,255,0.4)',
         },
       });
 
@@ -96,50 +96,48 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
     }
   }, [map, points]);
 
-  // ── Selected trip overlay ──────────────────────────────────────────────────
+  // ── Trip route overlay ────────────────────────────────────────────────────
   useEffect(() => {
     if (!map || !initialized.current) return;
 
-    // Remove old trip layers
-    const tripLayers = ['trip-planned', 'trip-actual', 'trip-pts', 'trip-start', 'trip-end'];
-    const tripSources = ['trip-planned-src', 'trip-actual-src', 'trip-pts-src'];
-    tripLayers.forEach(id => { try { if (map.getLayer(id)) map.removeLayer(id); } catch (_) {} });
-    tripSources.forEach(id => { try { if (map.getSource(id)) map.removeSource(id); } catch (_) {} });
-    tripLayersAdded.current = false;
+    // Remove previous trip layers/sources
+    ['trip-planned', 'trip-actual', 'trip-pts'].forEach(id => {
+      try { if (map.getLayer(id)) map.removeLayer(id); } catch (_) {}
+    });
+    ['trip-planned-src', 'trip-actual-src', 'trip-pts-src'].forEach(id => {
+      try { if (map.getSource(id)) map.removeSource(id); } catch (_) {}
+    });
 
-    if (!selectedTrip || !selectedTrip.coords || selectedTrip.coords.length < 2) return;
+    if (!selectedTrip) return;
 
-    const coords = selectedTrip.coords; // [[lng, lat], ...]
-    const start = coords[0];
-    const end = coords[coords.length - 1];
+    const {
+      coords,          // raw GPS [lng,lat][]
+      matchedRoute,    // OSRM map-matched [lng,lat][] (null while loading)
+      plannedRoute,    // OSRM planned route [lng,lat][] (null while loading)
+    } = selectedTrip;
 
-    // Planned route: straight line origin → destination
+    if (!coords || coords.length < 2) return;
+
+    const actualCoords  = matchedRoute || coords;    // fallback to raw if not yet matched
+    const plannedCoords = plannedRoute || [coords[0], coords[coords.length - 1]]; // fallback straight line
+
+    // Sources
     map.addSource('trip-planned-src', {
       type: 'geojson',
       data: {
         type: 'FeatureCollection',
-        features: [{
-          type: 'Feature',
-          geometry: { type: 'LineString', coordinates: [start, end] },
-          properties: {},
-        }],
+        features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: plannedCoords }, properties: {} }],
       },
     });
 
-    // Actual route: full GPS path
     map.addSource('trip-actual-src', {
       type: 'geojson',
       data: {
         type: 'FeatureCollection',
-        features: [{
-          type: 'Feature',
-          geometry: { type: 'LineString', coordinates: coords },
-          properties: {},
-        }],
+        features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: actualCoords }, properties: {} }],
       },
     });
 
-    // GPS waypoints
     map.addSource('trip-pts-src', {
       type: 'geojson',
       data: {
@@ -152,21 +150,22 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
       },
     });
 
-    // Planned route — dashed blue
+    // Planned route — dashed blue, behind actual
     map.addLayer({
       id: 'trip-planned',
       type: 'line',
       source: 'trip-planned-src',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
-        'line-color': '#4fc3f7',
-        'line-width': 3,
-        'line-dasharray': [4, 4],
-        'line-opacity': 0.9,
+        'line-color': '#29b6f6',
+        'line-width': 4,
+        'line-dasharray': [5, 4],
+        'line-opacity': 0.95,
+        'line-gap-width': 0,
       },
     });
 
-    // Actual GPS route — solid orange/red
+    // Actual GPS route — solid orange (road-snapped if OSRM returned data)
     map.addLayer({
       id: 'trip-actual',
       type: 'line',
@@ -174,46 +173,46 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
         'line-color': '#ff6b35',
-        'line-width': 4,
-        'line-opacity': 0.95,
+        'line-width': 3,
+        'line-opacity': 0.92,
       },
     });
 
-    // GPS waypoints (small dots)
+    // Raw GPS waypoints (small dots, only at high zoom)
     map.addLayer({
       id: 'trip-pts',
       type: 'circle',
       source: 'trip-pts-src',
+      minzoom: 13,
       paint: {
-        'circle-radius': 3,
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 13, 2, 17, 5],
         'circle-color': '#ffffff',
-        'circle-opacity': 0.7,
+        'circle-opacity': 0.6,
         'circle-stroke-width': 1,
         'circle-stroke-color': '#ff6b35',
       },
     });
 
-    // Fly to trip bounds
-    const lngs = coords.map(c => c[0]);
-    const lats = coords.map(c => c[1]);
+    // Fly to route bounds
+    const allCoords = [...actualCoords, ...plannedCoords];
+    const lngs = allCoords.map(c => c[0]);
+    const lats = allCoords.map(c => c[1]);
     map.fitBounds(
       [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
-      { padding: 60, duration: 1200 }
+      { padding: 80, duration: 1200, maxZoom: 15 }
     );
-
-    tripLayersAdded.current = true;
   }, [map, selectedTrip]);
 
   // Cleanup
   useEffect(() => {
     return () => {
       if (!map || !initialized.current) return;
-      const layers = ['hm-heat', 'hm-dots', 'trip-planned', 'trip-actual', 'trip-pts'];
-      const sources = ['hm-points', 'trip-planned-src', 'trip-actual-src', 'trip-pts-src'];
-      try {
-        layers.forEach(id => { if (map.getLayer(id)) map.removeLayer(id); });
-        sources.forEach(id => { if (map.getSource(id)) map.removeSource(id); });
-      } catch (_) {}
+      ['hm-heat', 'trip-planned', 'trip-actual', 'trip-pts'].forEach(id => {
+        try { if (map.getLayer(id)) map.removeLayer(id); } catch (_) {}
+      });
+      ['hm-points', 'trip-planned-src', 'trip-actual-src', 'trip-pts-src'].forEach(id => {
+        try { if (map.getSource(id)) map.removeSource(id); } catch (_) {}
+      });
       initialized.current = false;
     };
   }, [map]);

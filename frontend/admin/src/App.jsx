@@ -3,6 +3,7 @@ import MapContainer from './components/MapContainer';
 import FilterPanel from './components/FilterPanel';
 import StatsOverlay from './components/StatsOverlay';
 import { useHeatmapStream } from './hooks/useHeatmapStream';
+import { matchTripToRoads, getPlannedRoute } from './utils/osrmRouting';
 
 const PORTO_FROM = 1372636800000; // 2013-07-01
 const PORTO_TO   = 1377907200000; // 2013-08-31
@@ -62,16 +63,44 @@ export default function App() {
   // Auto-load Porto data on mount
   useEffect(() => { fetchHistory(PORTO_FROM, PORTO_TO); }, []);
 
-  // Handle trip selection — build selectedTrip object for HeatmapLayer
-  const handleSelectTrip = (trip) => {
+  // Handle trip selection — immediately show raw GPS, then upgrade to OSRM-matched route
+  const handleSelectTrip = async (trip) => {
     if (!trip) { setSelectedTrip(null); return; }
-    setSelectedTrip({
+
+    // Step 1: Show immediately with raw GPS (user sees route right away)
+    const base = {
       trip_id:       trip.trip_id,
       driver_id:     trip.driver_id,
       avg_deviation: trip.avg_deviation,
       point_count:   trip.point_count,
       coords:        trip.coords,
-    });
+      matchedRoute:  null,   // loading
+      plannedRoute:  null,   // loading
+      osrmLoading:   true,
+    };
+    setSelectedTrip(base);
+
+    // Step 2: Fetch OSRM map matching + planned route in parallel
+    try {
+      const start = trip.coords[0];
+      const end   = trip.coords[trip.coords.length - 1];
+
+      const [matched, planned] = await Promise.all([
+        matchTripToRoads(trip.coords),
+        getPlannedRoute(start, end),
+      ]);
+
+      setSelectedTrip(prev => prev?.trip_id === trip.trip_id
+        ? { ...prev, matchedRoute: matched, plannedRoute: planned, osrmLoading: false }
+        : prev
+      );
+    } catch (err) {
+      console.error('OSRM failed:', err);
+      setSelectedTrip(prev => prev?.trip_id === trip.trip_id
+        ? { ...prev, osrmLoading: false }
+        : prev
+      );
+    }
   };
 
   const activePoints = mode === 'live' ? [] : historyPoints;
@@ -130,36 +159,55 @@ export default function App() {
             backdropFilter: 'blur(12px)',
             border: '1px solid rgba(108,99,255,0.3)',
             borderRadius: '14px', padding: '14px 24px',
-            display: 'flex', gap: '24px', alignItems: 'center',
+            display: 'flex', gap: '20px', alignItems: 'center',
             zIndex: 10, boxShadow: '0 4px 30px rgba(0,0,0,0.5)',
+            maxWidth: '700px',
           }}>
             <div>
-              <div style={{ color: '#888', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.6px' }}>Driver</div>
-              <div style={{ color: '#e0e0ff', fontWeight: 700, fontSize: '14px' }}>{selectedTrip.driver_id}</div>
+              <div style={{ color: '#555', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Driver</div>
+              <div style={{ color: '#e0e0ff', fontWeight: 700, fontSize: '13px' }}>{selectedTrip.driver_id}</div>
             </div>
             <div>
-              <div style={{ color: '#888', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.6px' }}>GPS Points</div>
-              <div style={{ color: '#e0e0ff', fontWeight: 700, fontSize: '14px' }}>{selectedTrip.point_count}</div>
+              <div style={{ color: '#555', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>GPS Points</div>
+              <div style={{ color: '#e0e0ff', fontWeight: 700, fontSize: '13px' }}>{selectedTrip.point_count}</div>
             </div>
             <div>
-              <div style={{ color: '#888', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.6px' }}>Avg Deviation</div>
-              <div style={{ color: '#ff6b35', fontWeight: 700, fontSize: '14px' }}>
+              <div style={{ color: '#555', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Avg Deviation</div>
+              <div style={{ color: '#ff6b35', fontWeight: 700, fontSize: '13px' }}>
                 {(selectedTrip.avg_deviation / 1000).toFixed(1)} km
               </div>
             </div>
-            <div style={{ display: 'flex', gap: '12px', fontSize: '12px' }}>
-              <span><span style={{ color: '#4fc3f7' }}>━━</span> Planned</span>
-              <span><span style={{ color: '#ff6b35' }}>━━</span> Actual</span>
+            <div style={{ borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '20px' }}>
+              {selectedTrip.osrmLoading ? (
+                <div style={{ color: '#666', fontSize: '11px' }}>⏳ Map matching…</div>
+              ) : (
+                <div style={{ fontSize: '12px', lineHeight: 1.8 }}>
+                  <div>
+                    <span style={{ color: '#29b6f6', marginRight: '6px' }}>━━ ╌ ╌</span>
+                    <span style={{ color: '#aaa' }}>
+                      {selectedTrip.plannedRoute ? 'Planned route (OSRM)' : 'Planned (fallback)'}
+                    </span>
+                  </div>
+                  <div>
+                    <span style={{ color: '#ff6b35', marginRight: '6px' }}>━━━</span>
+                    <span style={{ color: '#aaa' }}>
+                      {selectedTrip.matchedRoute ? 'Actual route (map matched)' : 'Actual (raw GPS)'}
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
             <button
               onClick={() => setSelectedTrip(null)}
               style={{
                 background: 'rgba(255,255,255,0.08)', border: 'none', cursor: 'pointer',
-                color: '#888', borderRadius: '6px', padding: '4px 10px', fontSize: '13px',
+                color: '#666', borderRadius: '6px', padding: '5px 12px', fontSize: '14px',
+                marginLeft: '4px',
               }}
             >✕</button>
           </div>
         )}
+
 
         <StatsOverlay stats={activeStats} mode={mode} connectionStatus={connectionStatus} />
       </div>
