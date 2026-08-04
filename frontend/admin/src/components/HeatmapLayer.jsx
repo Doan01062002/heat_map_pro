@@ -1,24 +1,24 @@
 import { useEffect, useRef } from 'react';
 
 /**
- * HeatmapLayer — Renders heatmap cells as colored circles on the MapLibre map.
+ * HeatmapLayer — Renders a smooth gradient heatmap using MapLibre's native
+ * heatmap layer type. Produces the classic green → yellow → red blob effect.
  *
- * Uses MapLibre's native GeoJSON source + circle layer instead of Deck.gl
- * to avoid heavy dependencies. Each cell is a point at the cell center,
- * colored and sized by intensity.
- *
- * Color scale: green (low) → yellow (medium) → red (high)
+ * Each H3 cell is plotted as a weighted point; MapLibre's GPU-accelerated
+ * heatmap kernel blends them into smooth gradients automatically.
  */
 
 export default function HeatmapLayer({ map, cells = [] }) {
   const sourceAdded = useRef(false);
+  const prevCellCount = useRef(0);
 
   useEffect(() => {
-    if (!map) return;
+    if (!map || cells.length === 0) return;
 
-    // Convert cells to GeoJSON
+    // Convert cells to GeoJSON with weight
+    const maxIntensity = Math.max(...cells.map(c => c.intensity || 1), 1);
+
     const features = cells.map((cell) => {
-      // Parse cell center from H-format: "H8:latGrid:lngGrid"
       const coords = parseCellCenter(cell.h3_index);
       if (!coords) return null;
 
@@ -30,6 +30,8 @@ export default function HeatmapLayer({ map, cells = [] }) {
         },
         properties: {
           intensity: cell.intensity || 1,
+          // Normalized weight [0, 1] for heatmap
+          weight: Math.min((cell.intensity || 1) / maxIntensity, 1),
           h3_index: cell.h3_index,
         },
       };
@@ -41,48 +43,82 @@ export default function HeatmapLayer({ map, cells = [] }) {
     };
 
     if (!sourceAdded.current) {
-      // First time: add source and layers
-      map.addSource('heatmap-cells', {
+      // Add GeoJSON source
+      map.addSource('heatmap-source', {
         type: 'geojson',
         data: geojson,
       });
 
-      // Glow layer (larger, more transparent)
+      // ---- Layer 1: Smooth heatmap (the main visual) ----
       map.addLayer({
-        id: 'heatmap-glow',
-        type: 'circle',
-        source: 'heatmap-cells',
+        id: 'heatmap-heat',
+        type: 'heatmap',
+        source: 'heatmap-source',
+        maxzoom: 18,
         paint: {
-          'circle-radius': [
+          // Weight: use the normalized weight property
+          'heatmap-weight': [
             'interpolate', ['linear'], ['get', 'intensity'],
-            1, 14,
-            50, 25,
-            500, 40,
-            2000, 55,
+            0, 0,
+            5, 0.3,
+            50, 0.6,
+            500, 0.85,
+            2000, 1,
           ],
-          'circle-color': [
-            'interpolate', ['linear'], ['get', 'intensity'],
-            1, 'rgba(0, 255, 128, 0.1)',
-            50, 'rgba(255, 255, 0, 0.15)',
-            300, 'rgba(255, 128, 0, 0.2)',
-            1000, 'rgba(255, 0, 0, 0.3)',
+
+          // Intensity (zoom-dependent amplification)
+          'heatmap-intensity': [
+            'interpolate', ['linear'], ['zoom'],
+            8, 0.8,
+            12, 1.5,
+            15, 2.5,
           ],
-          'circle-blur': 1,
+
+          // Radius in pixels (zoom-dependent)
+          'heatmap-radius': [
+            'interpolate', ['linear'], ['zoom'],
+            8, 15,
+            10, 25,
+            12, 35,
+            14, 50,
+            16, 70,
+          ],
+
+          // Color ramp: transparent → green → yellow → orange → red
+          'heatmap-color': [
+            'interpolate', ['linear'], ['heatmap-density'],
+            0,    'rgba(0, 0, 0, 0)',
+            0.1,  'rgba(0, 228, 0, 0.3)',
+            0.25, 'rgba(49, 252, 0, 0.5)',
+            0.4,  'rgba(171, 252, 0, 0.6)',
+            0.55, 'rgba(252, 244, 0, 0.7)',
+            0.7,  'rgba(252, 176, 0, 0.8)',
+            0.85, 'rgba(252, 80, 0, 0.85)',
+            1.0,  'rgba(240, 10, 10, 0.9)',
+          ],
+
+          // Opacity (fade slightly at high zoom to reveal points)
+          'heatmap-opacity': [
+            'interpolate', ['linear'], ['zoom'],
+            8, 0.9,
+            14, 0.75,
+            18, 0.5,
+          ],
         },
       });
 
-      // Core layer (smaller, more opaque)
+      // ---- Layer 2: Circle points (visible at high zoom) ----
       map.addLayer({
-        id: 'heatmap-core',
+        id: 'heatmap-points',
         type: 'circle',
-        source: 'heatmap-cells',
+        source: 'heatmap-source',
+        minzoom: 14,
         paint: {
           'circle-radius': [
             'interpolate', ['linear'], ['get', 'intensity'],
             1, 4,
-            50, 8,
-            500, 14,
-            2000, 22,
+            100, 8,
+            1000, 14,
           ],
           'circle-color': [
             'interpolate', ['linear'], ['get', 'intensity'],
@@ -90,56 +126,58 @@ export default function HeatmapLayer({ map, cells = [] }) {
             50, '#ffff00',
             300, '#ff8800',
             1000, '#ff0040',
-            2000, '#ff0066',
           ],
-          'circle-opacity': 0.85,
+          'circle-opacity': 0.8,
           'circle-stroke-width': 1,
-          'circle-stroke-color': 'rgba(255,255,255,0.3)',
+          'circle-stroke-color': 'rgba(255,255,255,0.4)',
         },
       });
 
       // Popup on click
-      map.on('click', 'heatmap-core', (e) => {
+      map.on('click', 'heatmap-points', (e) => {
+        if (!e.features || !e.features.length) return;
         const props = e.features[0].properties;
         const coords = e.lngLat;
 
-        const popup = new (map._maplibregl || window.maplibregl).Popup({ offset: 10 })
+        new (map._maplibregl || window.maplibregl).Popup({ offset: 10 })
           .setLngLat(coords)
           .setHTML(`
-            <div style="font-family:Inter,sans-serif;font-size:13px;color:#333">
-              <b>Cell: ${props.h3_index}</b><br/>
-              Deviations: <b style="color:#ff4444">${props.intensity}</b>
+            <div style="font-family:Inter,sans-serif;font-size:13px;color:#333;min-width:140px">
+              <div style="font-weight:700;margin-bottom:6px">📍 Cell Info</div>
+              <div>Cell: <code style="font-size:11px;color:#666">${props.h3_index}</code></div>
+              <div>Deviations: <b style="color:#ff4444">${props.intensity}</b></div>
             </div>
           `)
           .addTo(map);
       });
 
-      // Cursor change on hover
-      map.on('mouseenter', 'heatmap-core', () => {
+      map.on('mouseenter', 'heatmap-points', () => {
         map.getCanvas().style.cursor = 'pointer';
       });
-      map.on('mouseleave', 'heatmap-core', () => {
+      map.on('mouseleave', 'heatmap-points', () => {
         map.getCanvas().style.cursor = '';
       });
 
       sourceAdded.current = true;
     } else {
-      // Update existing source data
-      const source = map.getSource('heatmap-cells');
+      // Update existing source
+      const source = map.getSource('heatmap-source');
       if (source) {
         source.setData(geojson);
       }
     }
+
+    prevCellCount.current = cells.length;
   }, [map, cells]);
 
-  // Cleanup on unmount
+  // Cleanup
   useEffect(() => {
     return () => {
       if (map && sourceAdded.current) {
         try {
-          if (map.getLayer('heatmap-glow')) map.removeLayer('heatmap-glow');
-          if (map.getLayer('heatmap-core')) map.removeLayer('heatmap-core');
-          if (map.getSource('heatmap-cells')) map.removeSource('heatmap-cells');
+          if (map.getLayer('heatmap-heat')) map.removeLayer('heatmap-heat');
+          if (map.getLayer('heatmap-points')) map.removeLayer('heatmap-points');
+          if (map.getSource('heatmap-source')) map.removeSource('heatmap-source');
         } catch (e) {
           // Map may already be destroyed
         }
@@ -148,7 +186,7 @@ export default function HeatmapLayer({ map, cells = [] }) {
     };
   }, [map]);
 
-  return null; // This component only manages map layers
+  return null;
 }
 
 /**
