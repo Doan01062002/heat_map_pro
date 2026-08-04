@@ -315,12 +315,13 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
   useEffect(() => {
     if (!map || !initialized.current) return;
 
-    ['trip-planned-case','trip-planned','trip-actual-case','trip-actual','trip-pts'].forEach(id => {
-      try { if (map.getLayer(id)) map.removeLayer(id); } catch (_) {}
-    });
-    ['trip-planned-src','trip-actual-src','trip-pts-src'].forEach(id => {
-      try { if (map.getSource(id)) map.removeSource(id); } catch (_) {}
-    });
+    // Cleanup previous trip layers
+    ['trip-planned-case','trip-planned','trip-actual-case','trip-actual',
+     'trip-overlap-case','trip-overlap','trip-pts','trip-markers',
+    ].forEach(id => { try { if (map.getLayer(id)) map.removeLayer(id); } catch (_) {} });
+    ['trip-planned-src','trip-actual-src','trip-pts-src',
+     'trip-overlap-src','trip-markers-src',
+    ].forEach(id => { try { if (map.getSource(id)) map.removeSource(id); } catch (_) {} });
 
     if (!selectedTrip) return;
     const { coords, matchedRoute, plannedRoute } = selectedTrip;
@@ -329,8 +330,65 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
     const actualCoords  = matchedRoute || coords;
     const plannedCoords = plannedRoute || [coords[0], coords[coords.length - 1]];
 
-    const PopupClass = map._maplibregl?.Popup || window.maplibregl?.Popup;
+    // ── Overlap detection ────────────────────────────────────────────────────
+    // For each point in actualCoords, check if it's within 25m of the planned route
+    function ptSegDist(p, a, b) {
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      if (dx === 0 && dy === 0) {
+        const ex = p[0]-a[0], ey = p[1]-a[1];
+        return Math.sqrt(ex*ex + ey*ey) * 111320;
+      }
+      const t = Math.max(0, Math.min(1, ((p[0]-a[0])*dx + (p[1]-a[1])*dy) / (dx*dx + dy*dy)));
+      const ex = p[0] - (a[0]+t*dx), ey = p[1] - (a[1]+t*dy);
+      return Math.sqrt(ex*ex + ey*ey) * 111320; // rough meters
+    }
+    function minDistToRoute(pt, route) {
+      let min = Infinity;
+      for (let j = 0; j < route.length - 1; j++) {
+        const d = ptSegDist(pt, route[j], route[j+1]);
+        if (d < min) min = d;
+      }
+      return min;
+    }
 
+    const OVERLAP_THRESHOLD_M = 25;
+    const isOverlap = actualCoords.map(pt => minDistToRoute(pt, plannedCoords) < OVERLAP_THRESHOLD_M);
+
+    // Extract continuous overlapping line segments
+    const overlapSegments = [];
+    let cur = null;
+    for (let i = 0; i < actualCoords.length; i++) {
+      if (isOverlap[i]) {
+        if (!cur) cur = [actualCoords[i]];
+        else cur.push(actualCoords[i]);
+      } else {
+        if (cur && cur.length >= 2) overlapSegments.push(cur);
+        cur = null;
+      }
+    }
+    if (cur && cur.length >= 2) overlapSegments.push(cur);
+
+    const overlapGeoJSON = {
+      type: 'FeatureCollection',
+      features: overlapSegments.map(seg => ({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: seg },
+        properties: {},
+      })),
+    };
+
+    // ── Start / End markers ───────────────────────────────────────────────────
+    const startPt = actualCoords[0];
+    const endPt   = actualCoords[actualCoords.length - 1];
+    const markersGeoJSON = {
+      type: 'FeatureCollection',
+      features: [
+        { type: 'Feature', geometry: { type: 'Point', coordinates: startPt }, properties: { role: 'start' } },
+        { type: 'Feature', geometry: { type: 'Point', coordinates: endPt   }, properties: { role: 'end'   } },
+      ],
+    };
+
+    // ── Add sources ───────────────────────────────────────────────────────────
     map.addSource('trip-planned-src', {
       type: 'geojson',
       data: { type: 'Feature', geometry: { type: 'LineString', coordinates: plannedCoords }, properties: {} },
@@ -339,6 +397,8 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
       type: 'geojson',
       data: { type: 'Feature', geometry: { type: 'LineString', coordinates: actualCoords }, properties: {} },
     });
+    map.addSource('trip-overlap-src', { type: 'geojson', data: overlapGeoJSON });
+    map.addSource('trip-markers-src', { type: 'geojson', data: markersGeoJSON });
     map.addSource('trip-pts-src', {
       type: 'geojson',
       data: {
@@ -349,35 +409,70 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
       },
     });
 
+    // ── Planned route: blue dashed ────────────────────────────────────────────
     map.addLayer({ id: 'trip-planned-case', type: 'line', source: 'trip-planned-src',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': '#fff', 'line-width': 8, 'line-opacity': 0.2 },
+      paint: { 'line-color': '#fff', 'line-width': 8, 'line-opacity': 0.15 },
     });
     map.addLayer({ id: 'trip-planned', type: 'line', source: 'trip-planned-src',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': '#29b6f6', 'line-width': 4, 'line-dasharray': [5, 4], 'line-opacity': 0.95 },
+      paint: { 'line-color': '#29b6f6', 'line-width': 4, 'line-dasharray': [5, 4], 'line-opacity': 0.9 },
     });
+
+    // ── Actual route: orange ──────────────────────────────────────────────────
     map.addLayer({ id: 'trip-actual-case', type: 'line', source: 'trip-actual-src',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': '#000', 'line-width': 7, 'line-opacity': 0.4 },
+      paint: { 'line-color': '#000', 'line-width': 7, 'line-opacity': 0.35 },
     });
     map.addLayer({ id: 'trip-actual', type: 'line', source: 'trip-actual-src',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': '#ff6b35', 'line-width': 4, 'line-opacity': 0.95 },
     });
+
+    // ── Overlap segments: purple ──────────────────────────────────────────────
+    if (overlapSegments.length > 0) {
+      map.addLayer({ id: 'trip-overlap-case', type: 'line', source: 'trip-overlap-src',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#000', 'line-width': 9, 'line-opacity': 0.3 },
+      });
+      map.addLayer({ id: 'trip-overlap', type: 'line', source: 'trip-overlap-src',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#e040fb', 'line-width': 5, 'line-opacity': 1.0 },
+      });
+    }
+
+    // ── Raw GPS dots (visible at zoom ≥ 13) ──────────────────────────────────
     map.addLayer({ id: 'trip-pts', type: 'circle', source: 'trip-pts-src', minzoom: 13,
       paint: {
-        'circle-radius': ['interpolate', ['linear'], ['zoom'], 13, 2, 17, 5],
-        'circle-color': '#fff', 'circle-opacity': 0.7,
-        'circle-stroke-width': 1.5, 'circle-stroke-color': '#ff6b35',
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 13, 2, 17, 4],
+        'circle-color': '#fff', 'circle-opacity': 0.65,
+        'circle-stroke-width': 1.2, 'circle-stroke-color': '#ff6b35',
       },
     });
 
+    // ── Start / End markers ───────────────────────────────────────────────────
+    map.addLayer({ id: 'trip-markers', type: 'circle', source: 'trip-markers-src',
+      paint: {
+        'circle-radius': 10,
+        'circle-color': [
+          'match', ['get', 'role'],
+          'start', '#00e676',  // bright green = start
+          'end',   '#ff1744',  // bright red = end
+          '#fff'
+        ],
+        'circle-stroke-width': 3,
+        'circle-stroke-color': '#fff',
+        'circle-opacity': 1.0,
+      },
+    });
+
+    // Cursor changes
     map.on('mouseenter', 'trip-actual',  () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'trip-actual',  () => { map.getCanvas().style.cursor = ''; });
     map.on('mouseenter', 'trip-planned', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'trip-planned', () => { map.getCanvas().style.cursor = ''; });
 
+    // Fit map to trip
     const all = [...actualCoords, ...plannedCoords];
     const lngs = all.map(c => c[0]), lats = all.map(c => c[1]);
     map.fitBounds(
@@ -392,10 +487,12 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
       if (!map || !initialized.current) return;
       if (clickHandler.current) map.off('click', clickHandler.current);
       ['hm-heat','hm-hover','hm-snapped-dots',
-        'trip-planned-case','trip-planned','trip-actual-case','trip-actual','trip-pts',
+        'trip-planned-case','trip-planned','trip-actual-case','trip-actual',
+        'trip-overlap-case','trip-overlap','trip-pts','trip-markers',
       ].forEach(id => { try { if (map.getLayer(id)) map.removeLayer(id); } catch (_) {} });
       ['hm-points','hm-snapped',
-        'trip-planned-src','trip-actual-src','trip-pts-src',
+        'trip-planned-src','trip-actual-src','trip-overlap-src',
+        'trip-pts-src','trip-markers-src',
       ].forEach(id => { try { if (map.getSource(id)) map.removeSource(id); } catch (_) {} });
       initialized.current = false;
     };
@@ -403,3 +500,4 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
 
   return null;
 }
+
