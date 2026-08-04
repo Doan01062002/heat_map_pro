@@ -5,45 +5,84 @@ import StatsOverlay from './components/StatsOverlay';
 import { useHeatmapStream } from './hooks/useHeatmapStream';
 
 /**
- * App — Admin Heatmap Dashboard root component.
- *
- * Architecture:
- * - MapContainer: MapLibre base map + Deck.gl H3HexagonLayer
- * - FilterPanel: Toggle live/history view, time range selection
- * - StatsOverlay: Real-time KPIs (active drivers, deviations, cells)
- * - useHeatmapStream: WebSocket subscription for live heatmap updates
+ * App — Admin Dashboard root component.
  *
  * Data flow:
- * 1. useHeatmapStream connects to ws://host/ws/admin
- * 2. Receives HeatmapUpdate JSON every 1 second
- * 3. Accumulates H3 cell data in state
- * 4. MapContainer renders cells using Deck.gl H3HexagonLayer
- * 5. FilterPanel allows switching between live and historical views
+ * 1. useHeatmapStream subscribes to WebSocket for live heatmap updates
+ * 2. HeatmapLayer renders H3 hexagon cells on MapLibre via Deck.gl
+ * 3. FilterPanel toggles live/history mode and date range
+ * 4. StatsOverlay shows real-time KPIs
  */
 export default function App() {
-  const [viewMode, setViewMode] = useState('live'); // 'live' | 'history'
-  const [timeRange, setTimeRange] = useState({ from: null, to: null });
+  const [mode, setMode] = useState('live'); // 'live' | 'history'
+  const [dateRange, setDateRange] = useState({ from: null, to: null });
 
-  const wsUrl = import.meta.env.VITE_WS_URL?.replace('/ws/driver', '/ws/admin')
-    || 'ws://localhost:8080/ws/admin';
+  const wsUrl = import.meta.env.VITE_ADMIN_WS_URL || 'ws://localhost:8080/ws/admin';
+  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 
-  const { cells, stats, connectionStatus } = useHeatmapStream(wsUrl);
+  const {
+    cells,
+    stats,
+    connectionStatus,
+    clearCells,
+  } = useHeatmapStream(wsUrl, mode === 'live');
+
+  // History mode: fetch from REST API
+  const [historyCells, setHistoryCells] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const handleFetchHistory = async (from, to) => {
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(`${apiUrl}/api/history?from=${from}&to=${to}`);
+      const data = await res.json();
+      setHistoryCells(data.cells || []);
+    } catch (err) {
+      console.error('Failed to fetch history:', err);
+      setHistoryCells([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const activeCells = mode === 'live' ? cells : historyCells;
 
   return (
-    <div style={{ position: 'relative', width: '100vw', height: '100vh', fontFamily: 'Inter, sans-serif' }}>
-      {/* Main map with heatmap overlay */}
-      <MapContainer cells={cells} />
-
-      {/* Stats overlay (top-right) */}
-      <StatsOverlay stats={stats} connectionStatus={connectionStatus} />
-
-      {/* Filter panel (bottom) */}
+    <div style={{
+      display: 'flex',
+      height: '100vh',
+      fontFamily: 'Inter, sans-serif',
+      background: '#0a0a1a',
+    }}>
+      {/* Sidebar */}
       <FilterPanel
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
-        timeRange={timeRange}
-        onTimeRangeChange={setTimeRange}
+        mode={mode}
+        onModeChange={(m) => {
+          setMode(m);
+          if (m === 'live') {
+            setHistoryCells([]);
+            clearCells();
+          }
+        }}
+        dateRange={dateRange}
+        onDateRangeChange={setDateRange}
+        onFetchHistory={handleFetchHistory}
+        historyLoading={historyLoading}
+        connectionStatus={connectionStatus}
       />
+
+      {/* Map Area */}
+      <div style={{ flex: 1, position: 'relative' }}>
+        <MapContainer cells={activeCells} />
+
+        {/* Stats Overlay */}
+        <StatsOverlay
+          stats={stats}
+          cellCount={activeCells.length}
+          mode={mode}
+          connectionStatus={connectionStatus}
+        />
+      </div>
     </div>
   );
 }

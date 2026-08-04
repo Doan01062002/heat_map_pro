@@ -1,117 +1,81 @@
 import React from 'react';
 
 /**
- * StatsOverlay — Real-time KPI overlay shown on the admin dashboard.
- *
- * Props:
- * @param {{ totalDrivers: number, totalDeviations: number, cellCount: number }} stats
- * @param {string} connectionStatus
+ * StatsOverlay — Glassmorphism KPI cards floating over the map.
  */
-export default function StatsOverlay({ stats, connectionStatus }) {
-  const statusColors = {
-    connected: '#4caf50',
-    connecting: '#ff9800',
-    disconnected: '#9e9e9e',
-    error: '#f44336',
-  };
+export default function StatsOverlay({ stats, cellCount, mode, connectionStatus }) {
+  const cards = [
+    { label: 'Active Drivers', value: stats.totalDrivers || 0, color: '#6c63ff', icon: '🚗' },
+    { label: 'Deviations', value: stats.totalDeviations || 0, color: '#ff4444', icon: '⚠️' },
+    { label: 'Hot Cells', value: cellCount, color: '#ff9f43', icon: '🔥' },
+  ];
 
   return (
-    <div style={styles.overlay}>
-      <h3 style={styles.title}>📊 Deviation Heatmap</h3>
+    <div style={{
+      position: 'absolute',
+      top: '16px',
+      right: '60px',
+      display: 'flex',
+      gap: '10px',
+      zIndex: 10,
+    }}>
+      {cards.map(({ label, value, color, icon }) => (
+        <div key={label} style={{
+          background: 'rgba(10, 10, 30, 0.75)',
+          backdropFilter: 'blur(12px)',
+          border: '1px solid rgba(255,255,255,0.08)',
+          borderRadius: '12px',
+          padding: '12px 18px',
+          minWidth: '100px',
+          textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '14px', marginBottom: '4px' }}>{icon}</div>
+          <div style={{
+            fontSize: '22px',
+            fontWeight: 800,
+            color,
+            fontVariantNumeric: 'tabular-nums',
+            lineHeight: 1,
+          }}>
+            {typeof value === 'number' ? value.toLocaleString() : value}
+          </div>
+          <div style={{
+            fontSize: '10px',
+            color: '#777',
+            textTransform: 'uppercase',
+            letterSpacing: '0.6px',
+            marginTop: '4px',
+          }}>
+            {label}
+          </div>
+        </div>
+      ))}
 
-      <div style={styles.statsGrid}>
-        <StatCard label="Active Drivers" value={stats.totalDrivers} icon="🚗" />
-        <StatCard label="Deviations / sec" value={stats.totalDeviations} icon="⚠️" color="#ff6b6b" />
-        <StatCard label="Active Cells" value={stats.cellCount} icon="⬡" color="#4fc3f7" />
-      </div>
-
-      <div style={styles.connectionRow}>
-        <span
-          style={{
-            ...styles.statusDot,
-            backgroundColor: statusColors[connectionStatus],
-          }}
-        />
-        <span style={styles.statusText}>{connectionStatus}</span>
+      {/* Mode badge */}
+      <div style={{
+        background: mode === 'live'
+          ? 'rgba(68,255,68,0.1)'
+          : 'rgba(108,99,255,0.1)',
+        border: `1px solid ${mode === 'live' ? 'rgba(68,255,68,0.25)' : 'rgba(108,99,255,0.25)'}`,
+        borderRadius: '12px',
+        padding: '12px 14px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backdropFilter: 'blur(12px)',
+      }}>
+        <div style={{
+          fontSize: '12px',
+          fontWeight: 700,
+          color: mode === 'live' ? '#44ff44' : '#8888ff',
+        }}>
+          {mode === 'live' ? '● LIVE' : '📅 HISTORY'}
+        </div>
+        <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>
+          {mode === 'live' ? connectionStatus : 'static'}
+        </div>
       </div>
     </div>
   );
 }
-
-function StatCard({ label, value, icon, color }) {
-  return (
-    <div style={styles.card}>
-      <span style={styles.icon}>{icon}</span>
-      <span style={{ ...styles.value, color: color || '#f0f0f0' }}>
-        {typeof value === 'number' ? value.toLocaleString() : value}
-      </span>
-      <span style={styles.label}>{label}</span>
-    </div>
-  );
-}
-
-const styles = {
-  overlay: {
-    position: 'absolute',
-    top: '16px',
-    right: '16px',
-    backgroundColor: 'rgba(22, 27, 34, 0.92)',
-    backdropFilter: 'blur(12px)',
-    borderRadius: '12px',
-    padding: '16px',
-    width: '240px',
-    border: '1px solid #30363d',
-    zIndex: 1000,
-    fontFamily: 'Inter, sans-serif',
-  },
-  title: {
-    margin: '0 0 12px 0',
-    fontSize: '14px',
-    fontWeight: 600,
-    color: '#f0f0f0',
-  },
-  statsGrid: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '8px',
-  },
-  card: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    padding: '8px',
-    backgroundColor: 'rgba(13, 17, 23, 0.6)',
-    borderRadius: '8px',
-  },
-  icon: {
-    fontSize: '16px',
-  },
-  value: {
-    fontSize: '18px',
-    fontWeight: 700,
-    flex: 1,
-  },
-  label: {
-    fontSize: '11px',
-    color: '#8b949e',
-    textAlign: 'right',
-  },
-  connectionRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-    marginTop: '12px',
-    paddingTop: '12px',
-    borderTop: '1px solid #30363d',
-  },
-  statusDot: {
-    width: '8px',
-    height: '8px',
-    borderRadius: '50%',
-  },
-  statusText: {
-    fontSize: '11px',
-    color: '#8b949e',
-    textTransform: 'capitalize',
-  },
-};

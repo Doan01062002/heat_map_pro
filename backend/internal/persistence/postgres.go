@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/heat-map-pro/backend/internal/aggregator"
@@ -17,9 +18,27 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// DeviationEvent represents a single confirmed deviation to be persisted.
+// It is produced by the ingestion handler and buffered here until the next flush.
+type DeviationEvent struct {
+	DriverID        string
+	TripID          string
+	Latitude        float64
+	Longitude       float64
+	H3Index         string
+	DeviationMeters float64
+	Heading         float32
+	SpeedKmh        float32
+	Timestamp       time.Time
+}
+
 // PostgresWriter handles batch inserts and historical queries.
 type PostgresWriter struct {
 	pool *pgxpool.Pool
+
+	// Thread-safe event buffer — ingestion handler writes, flush loop reads+clears
+	mu     sync.Mutex
+	buffer []DeviationEvent
 }
 
 // NewPostgresWriter creates a new PostgreSQL writer with connection pooling.
@@ -43,10 +62,22 @@ func NewPostgresWriter(ctx context.Context, cfg *config.Config) (*PostgresWriter
 
 	slog.Info("postgresql connected", "host", cfg.PostgresHost, "db", cfg.PostgresDB)
 
-	return &PostgresWriter{pool: pool}, nil
+	return &PostgresWriter{
+		pool:   pool,
+		buffer: make([]DeviationEvent, 0, 1024),
+	}, nil
 }
 
-// StartFlushLoop runs a background loop that writes aggregated deviation data
+// BufferEvent adds a deviation event to the write buffer.
+// This is called by the ingestion handler for each confirmed deviation.
+// Thread-safe — multiple goroutines can call this concurrently.
+func (w *PostgresWriter) BufferEvent(event DeviationEvent) {
+	w.mu.Lock()
+	w.buffer = append(w.buffer, event)
+	w.mu.Unlock()
+}
+
+// StartFlushLoop runs a background loop that writes buffered deviation events
 // to PostgreSQL at the given interval (default: 30 seconds).
 func (w *PostgresWriter) StartFlushLoop(ctx context.Context, agg *aggregator.Aggregator, interval time.Duration) {
 	ticker := time.NewTicker(interval)
@@ -57,27 +88,69 @@ func (w *PostgresWriter) StartFlushLoop(ctx context.Context, agg *aggregator.Agg
 	for {
 		select {
 		case <-ctx.Done():
+			// Final flush on shutdown
+			w.flush(ctx)
 			slog.Info("postgres flush loop stopped")
 			return
 		case <-ticker.C:
-			w.flush(ctx, agg)
+			w.flush(ctx)
 		}
 	}
 }
 
-// flush writes the current aggregator snapshot to PostgreSQL.
-// Note: This shares the same snapshot with the Redis publisher if they run
-// at different intervals. In this design, the Postgres flush does NOT
-// call Snapshot() (which resets counters) — it reads the accumulated totals
-// from the Redis publisher's snapshots stored separately.
-//
-// TODO: Implement a separate accumulation buffer for Postgres writes.
-// For the demo, we insert summary rows per H3 cell per flush cycle.
-func (w *PostgresWriter) flush(ctx context.Context, agg *aggregator.Aggregator) {
-	// For the demo, the Postgres flush uses a separate snapshot mechanism.
-	// This is a placeholder — the actual implementation should batch-insert
-	// individual deviation events collected during the flush window.
-	slog.Debug("postgres flush: cycle complete")
+// flush drains the event buffer and batch-inserts all events into PostgreSQL.
+// Uses a single transaction with COPY-like batch insert for performance.
+func (w *PostgresWriter) flush(ctx context.Context) {
+	// Swap out the buffer atomically
+	w.mu.Lock()
+	if len(w.buffer) == 0 {
+		w.mu.Unlock()
+		return
+	}
+	events := w.buffer
+	w.buffer = make([]DeviationEvent, 0, cap(events))
+	w.mu.Unlock()
+
+	// Batch insert using a single transaction
+	tx, err := w.pool.Begin(ctx)
+	if err != nil {
+		slog.Error("postgres flush: begin tx failed", "error", err, "events_lost", len(events))
+		return
+	}
+
+	const insertSQL = `INSERT INTO deviation_events 
+		(driver_id, trip_id, latitude, longitude, h3_index, deviation_meters, heading, speed_kmh, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+
+	inserted := 0
+	for _, e := range events {
+		_, err := tx.Exec(ctx, insertSQL,
+			e.DriverID, e.TripID,
+			e.Latitude, e.Longitude,
+			e.H3Index, e.DeviationMeters,
+			e.Heading, e.SpeedKmh,
+			e.Timestamp,
+		)
+		if err != nil {
+			slog.Error("postgres flush: insert failed",
+				"error", err,
+				"driver_id", e.DriverID,
+				"h3_index", e.H3Index,
+			)
+			continue
+		}
+		inserted++
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		slog.Error("postgres flush: commit failed", "error", err, "events_lost", inserted)
+		return
+	}
+
+	slog.Info("postgres flush: batch inserted",
+		"inserted", inserted,
+		"total_buffered", len(events),
+	)
 }
 
 // HandleHistoryQuery handles GET /api/history?from=<unix_ms>&to=<unix_ms>

@@ -1,76 +1,71 @@
 import React from 'react';
 
 /**
- * StatsBar — Real-time statistics bar at the top of the simulator.
- *
- * Props:
- * @param {{ pointsSent: number, batchesSent: number, activeDrivers: number }} stats
- * @param {string} connectionStatus - 'connected' | 'connecting' | 'disconnected' | 'error'
- * @param {boolean} isRunning
+ * StatsBar — Top bar showing real-time simulation metrics.
  */
 export default function StatsBar({ stats, connectionStatus, isRunning }) {
-  const statusColors = {
-    connected: '#4caf50',
-    connecting: '#ff9800',
-    disconnected: '#9e9e9e',
-    error: '#f44336',
-  };
+  const statusColor = {
+    connected: '#44ff44',
+    connecting: '#ffaa44',
+    disconnected: '#ff4444',
+  }[connectionStatus] || '#ff4444';
 
   return (
-    <header style={styles.bar}>
-      <span style={styles.title}>Driver Simulator</span>
-
-      <div style={styles.stats}>
-        <Stat label="Status" value={isRunning ? 'Running' : 'Stopped'} color={isRunning ? '#4caf50' : '#9e9e9e'} />
-        <Stat label="Points Sent" value={stats.pointsSent.toLocaleString()} />
-        <Stat label="Batches" value={stats.batchesSent.toLocaleString()} />
-        <Stat label="WebSocket" value={connectionStatus} color={statusColors[connectionStatus]} />
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '10px 20px',
+      background: 'linear-gradient(135deg, #0f0c29, #302b63, #24243e)',
+      borderBottom: '1px solid rgba(255,255,255,0.06)',
+      fontFamily: 'Inter, sans-serif',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span style={{ fontSize: '20px' }}>📡</span>
+        <span style={{ color: '#fff', fontSize: '15px', fontWeight: 600 }}>
+          Heatmap Simulator
+        </span>
+        <span style={{
+          padding: '2px 10px',
+          borderRadius: '12px',
+          fontSize: '11px',
+          fontWeight: 600,
+          background: isRunning ? 'rgba(68,255,68,0.15)' : 'rgba(255,255,255,0.06)',
+          color: isRunning ? '#44ff44' : '#888',
+          border: `1px solid ${isRunning ? 'rgba(68,255,68,0.3)' : 'rgba(255,255,255,0.08)'}`,
+        }}>
+          {isRunning ? '● LIVE' : 'IDLE'}
+        </span>
       </div>
-    </header>
-  );
-}
 
-function Stat({ label, value, color }) {
-  return (
-    <div style={styles.stat}>
-      <span style={styles.statLabel}>{label}</span>
-      <span style={{ ...styles.statValue, color: color || '#e0e0e0' }}>{value}</span>
+      <div style={{ display: 'flex', gap: '24px', alignItems: 'center' }}>
+        <MetricBadge label="Active Drivers" value={stats.activeDrivers} color="#6c63ff" />
+        <MetricBadge label="Points Sent" value={stats.pointsSent.toLocaleString()} color="#44ddff" />
+        <MetricBadge label="Batches" value={stats.batchesSent} color="#ff9f43" />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span style={{
+            width: '8px', height: '8px', borderRadius: '50%',
+            background: statusColor,
+            boxShadow: `0 0 6px ${statusColor}`,
+          }} />
+          <span style={{ color: '#aaa', fontSize: '12px' }}>
+            WS: {connectionStatus}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
 
-const styles = {
-  bar: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '8px 20px',
-    backgroundColor: '#161b22',
-    borderBottom: '1px solid #30363d',
-    fontFamily: 'Inter, sans-serif',
-  },
-  title: {
-    fontSize: '14px',
-    fontWeight: 600,
-    color: '#f0f0f0',
-  },
-  stats: {
-    display: 'flex',
-    gap: '24px',
-  },
-  stat: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-  },
-  statLabel: {
-    fontSize: '10px',
-    color: '#8b949e',
-    textTransform: 'uppercase',
-    letterSpacing: '0.5px',
-  },
-  statValue: {
-    fontSize: '13px',
-    fontWeight: 500,
-  },
-};
+function MetricBadge({ label, value, color }) {
+  return (
+    <div style={{ textAlign: 'center' }}>
+      <div style={{ color, fontSize: '18px', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
+        {value}
+      </div>
+      <div style={{ color: '#777', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        {label}
+      </div>
+    </div>
+  );
+}

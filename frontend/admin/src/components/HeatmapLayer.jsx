@@ -1,89 +1,177 @@
-import React, { useMemo } from 'react';
-import { H3HexagonLayer } from '@deck.gl/geo-layers';
+import { useEffect, useRef } from 'react';
 
 /**
- * HeatmapLayer — Creates a Deck.gl H3HexagonLayer from heatmap cell data.
+ * HeatmapLayer — Renders heatmap cells as colored circles on the MapLibre map.
  *
- * This is a pure function (not a React component) that returns a Deck.gl layer
- * to be passed to the DeckGL component's layers prop.
+ * Uses MapLibre's native GeoJSON source + circle layer instead of Deck.gl
+ * to avoid heavy dependencies. Each cell is a point at the cell center,
+ * colored and sized by intensity.
  *
- * @param {Map<string, { h3_index: string, intensity: number }>} cells
- * @returns {H3HexagonLayer}
+ * Color scale: green (low) → yellow (medium) → red (high)
  */
-export function createHeatmapLayer(cells) {
-  const data = Array.from(cells.values());
 
-  // Find max intensity for normalization
-  const maxIntensity = data.reduce((max, c) => Math.max(max, c.intensity), 1);
+export default function HeatmapLayer({ map, cells = [] }) {
+  const sourceAdded = useRef(false);
 
-  return new H3HexagonLayer({
-    id: 'heatmap-h3-hexagons',
-    data,
-    pickable: true,
-    filled: true,
-    extruded: true,
-    wireframe: false,
+  useEffect(() => {
+    if (!map) return;
 
-    // Map H3 index
-    getHexagon: (d) => d.h3_index,
+    // Convert cells to GeoJSON
+    const features = cells.map((cell) => {
+      // Parse cell center from H-format: "H8:latGrid:lngGrid"
+      const coords = parseCellCenter(cell.h3_index);
+      if (!coords) return null;
 
-    // Color: gradient from blue (low) → yellow (medium) → red (high)
-    getFillColor: (d) => {
-      const t = d.intensity / maxIntensity;
-      if (t < 0.33) {
-        // Blue → Cyan
-        return [0, Math.floor(100 + t * 3 * 155), 255, 180];
-      } else if (t < 0.66) {
-        // Cyan → Yellow
-        const t2 = (t - 0.33) / 0.33;
-        return [Math.floor(t2 * 255), 255, Math.floor(255 * (1 - t2)), 200];
-      } else {
-        // Yellow → Red
-        const t3 = (t - 0.66) / 0.34;
-        return [255, Math.floor(255 * (1 - t3)), 0, 220];
+      return {
+        type: 'Feature',
+        geometry: {
+          type: 'Point',
+          coordinates: [coords.lng, coords.lat],
+        },
+        properties: {
+          intensity: cell.intensity || 1,
+          h3_index: cell.h3_index,
+        },
+      };
+    }).filter(Boolean);
+
+    const geojson = {
+      type: 'FeatureCollection',
+      features,
+    };
+
+    if (!sourceAdded.current) {
+      // First time: add source and layers
+      map.addSource('heatmap-cells', {
+        type: 'geojson',
+        data: geojson,
+      });
+
+      // Glow layer (larger, more transparent)
+      map.addLayer({
+        id: 'heatmap-glow',
+        type: 'circle',
+        source: 'heatmap-cells',
+        paint: {
+          'circle-radius': [
+            'interpolate', ['linear'], ['get', 'intensity'],
+            1, 20,
+            10, 35,
+            50, 50,
+          ],
+          'circle-color': [
+            'interpolate', ['linear'], ['get', 'intensity'],
+            1, 'rgba(0, 255, 128, 0.15)',
+            5, 'rgba(255, 255, 0, 0.2)',
+            15, 'rgba(255, 128, 0, 0.25)',
+            30, 'rgba(255, 0, 0, 0.3)',
+          ],
+          'circle-blur': 1,
+        },
+      });
+
+      // Core layer (smaller, more opaque)
+      map.addLayer({
+        id: 'heatmap-core',
+        type: 'circle',
+        source: 'heatmap-cells',
+        paint: {
+          'circle-radius': [
+            'interpolate', ['linear'], ['get', 'intensity'],
+            1, 6,
+            10, 12,
+            50, 20,
+          ],
+          'circle-color': [
+            'interpolate', ['linear'], ['get', 'intensity'],
+            1, '#00ff80',
+            5, '#ffff00',
+            15, '#ff8800',
+            30, '#ff0040',
+          ],
+          'circle-opacity': 0.85,
+          'circle-stroke-width': 1,
+          'circle-stroke-color': 'rgba(255,255,255,0.3)',
+        },
+      });
+
+      // Popup on click
+      map.on('click', 'heatmap-core', (e) => {
+        const props = e.features[0].properties;
+        const coords = e.lngLat;
+
+        const popup = new (map._maplibregl || window.maplibregl).Popup({ offset: 10 })
+          .setLngLat(coords)
+          .setHTML(`
+            <div style="font-family:Inter,sans-serif;font-size:13px;color:#333">
+              <b>Cell: ${props.h3_index}</b><br/>
+              Deviations: <b style="color:#ff4444">${props.intensity}</b>
+            </div>
+          `)
+          .addTo(map);
+      });
+
+      // Cursor change on hover
+      map.on('mouseenter', 'heatmap-core', () => {
+        map.getCanvas().style.cursor = 'pointer';
+      });
+      map.on('mouseleave', 'heatmap-core', () => {
+        map.getCanvas().style.cursor = '';
+      });
+
+      sourceAdded.current = true;
+    } else {
+      // Update existing source data
+      const source = map.getSource('heatmap-cells');
+      if (source) {
+        source.setData(geojson);
       }
-    },
+    }
+  }, [map, cells]);
 
-    // Height: proportional to deviation count
-    getElevation: (d) => d.intensity,
-    elevationScale: 50,
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (map && sourceAdded.current) {
+        try {
+          if (map.getLayer('heatmap-glow')) map.removeLayer('heatmap-glow');
+          if (map.getLayer('heatmap-core')) map.removeLayer('heatmap-core');
+          if (map.getSource('heatmap-cells')) map.removeSource('heatmap-cells');
+        } catch (e) {
+          // Map may already be destroyed
+        }
+        sourceAdded.current = false;
+      }
+    };
+  }, [map]);
 
-    // Line around each hexagon
-    getLineColor: [255, 255, 255, 40],
-    getLineWidth: 1,
-
-    // Tooltip
-    autoHighlight: true,
-    highlightColor: [255, 255, 255, 100],
-
-    // Transitions for smooth updates
-    transitions: {
-      getFillColor: 500,
-      getElevation: 500,
-    },
-
-    // Update triggers
-    updateTriggers: {
-      getFillColor: [maxIntensity],
-      getElevation: [data.length],
-    },
-  });
+  return null; // This component only manages map layers
 }
 
 /**
- * HeatmapLayer React wrapper — memoizes the layer creation.
- *
- * Props:
- * @param {Map} cells - H3 cell data from useHeatmapStream
- * @param {function} onLayerCreated - Callback with the created layer
+ * Parse cell center coordinates from grid-based cell index.
+ * Format: "H<resolution>:<latGrid>:<lngGrid>"
  */
-export default function HeatmapLayer({ cells }) {
-  const layer = useMemo(() => createHeatmapLayer(cells), [cells]);
+function parseCellCenter(cellIndex) {
+  if (!cellIndex) return null;
 
-  // This component doesn't render anything — it's a helper
-  // The actual rendering is done by passing the layer to DeckGL
-  return null;
+  const match = cellIndex.match(/^H(\d+):(\d+):(\d+)$/);
+  if (!match) return null;
+
+  const resolution = parseInt(match[1], 10);
+  const latGrid = parseInt(match[2], 10);
+  const lngGrid = parseInt(match[3], 10);
+
+  // Cell size lookup (must match backend spatial/h3_indexer.go)
+  const cellSizes = {
+    4: 0.1326, 5: 0.0500, 6: 0.0189, 7: 0.00713,
+    8: 0.00414, 9: 0.00156, 10: 0.000589,
+  };
+  const cellSize = cellSizes[resolution] || cellSizes[8];
+
+  const lat = latGrid * cellSize - 90.0 + cellSize / 2;
+  let lng = lngGrid * cellSize + cellSize / 2;
+  if (lng > 180) lng -= 360;
+
+  return { lat, lng };
 }
-
-// Export the layer creator for direct use in MapContainer
-export { createHeatmapLayer as getHeatmapLayer };

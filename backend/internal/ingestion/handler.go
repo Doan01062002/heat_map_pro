@@ -44,6 +44,24 @@ type DeviationAggregator interface {
 	Increment(h3Index string)
 }
 
+// EventPersister buffers deviation events for batch writing to PostgreSQL.
+type EventPersister interface {
+	// BufferEvent adds a deviation event to the write buffer.
+	BufferEvent(event DeviationEventData)
+}
+
+// DeviationEventData contains the full data for a single deviation event.
+type DeviationEventData struct {
+	DriverID        string
+	TripID          string
+	Latitude        float64
+	Longitude       float64
+	H3Index         string
+	DeviationMeters float64
+	Heading         float32
+	SpeedKmh        float32
+}
+
 // Waypoint represents a point on a planned route.
 type Waypoint struct {
 	Latitude  float64 `json:"latitude"`
@@ -71,6 +89,7 @@ type Handler struct {
 	matcher    MapMatcher
 	indexer    SpatialIndexer
 	aggregator DeviationAggregator
+	persister  EventPersister
 	cfg        *config.Config
 
 	upgrader websocket.Upgrader
@@ -86,6 +105,7 @@ func NewHandler(
 	m MapMatcher,
 	idx SpatialIndexer,
 	agg DeviationAggregator,
+	p EventPersister,
 	cfg *config.Config,
 ) *Handler {
 	return &Handler{
@@ -93,6 +113,7 @@ func NewHandler(
 		matcher:       m,
 		indexer:       idx,
 		aggregator:    agg,
+		persister:     p,
 		cfg:           cfg,
 		activeDrivers: make(map[string]bool),
 		upgrader: websocket.Upgrader{
@@ -183,8 +204,22 @@ func (h *Handler) processPoint(ctx context.Context, point *heatmapv1.GPSPoint) {
 	// Stage 4: H3 Spatial Indexing
 	h3Index := h.indexer.LatLngToCell(point.Latitude, point.Longitude)
 
-	// Stage 5: Atomic Aggregation
+	// Stage 5: Atomic Aggregation (for real-time Redis → admin dashboard)
 	h.aggregator.Increment(h3Index)
+
+	// Stage 6: Buffer for PostgreSQL persistence (batch write every 30s)
+	if h.persister != nil {
+		h.persister.BufferEvent(DeviationEventData{
+			DriverID:        point.DriverId,
+			TripID:          point.TripId,
+			Latitude:        point.Latitude,
+			Longitude:       point.Longitude,
+			H3Index:         h3Index,
+			DeviationMeters: distance,
+			Heading:         point.Heading,
+			SpeedKmh:        point.Speed,
+		})
+	}
 
 	slog.Debug("deviation detected",
 		"driver_id", point.DriverId,

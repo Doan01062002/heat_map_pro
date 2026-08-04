@@ -50,6 +50,7 @@ func main() {
 	)
 
 	// ---- Create Root Context (for graceful shutdown) ----
+	startTime := time.Now()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -86,8 +87,14 @@ func main() {
 	// 7. Admin WebSocket Hub
 	wsHub := websocket.NewHub(ctx, cfg)
 
-	// 8. Ingestion Handler (wires filter → spatial → aggregator)
-	ingestHandler := ingestion.NewHandler(bboxFilter, osrmClient, h3Indexer, agg, cfg)
+	// 8. Persistence Adapter (bridges ingestion → persistence without circular import)
+	pgAdapter := persistence.NewAdapter(pgWriter)
+
+	// 9. Ingestion Handler (wires filter → spatial → aggregator → persister)
+	ingestHandler := ingestion.NewHandler(bboxFilter, osrmClient, h3Indexer, agg, pgAdapter, cfg)
+
+	// ---- Wire Cross-Component Dependencies ----
+	redisPub.SetDriverCounter(ingestHandler)
 
 	// ---- Start Background Workers ----
 	go redisPub.StartFlushLoop(ctx, agg, time.Duration(cfg.FlushIntervalRedisMS)*time.Millisecond)
@@ -101,7 +108,10 @@ func main() {
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{"status":"healthy","uptime_seconds":%d}`, int(time.Since(time.Now()).Seconds()))
+		fmt.Fprintf(w, `{"status":"healthy","uptime_seconds":%d,"active_drivers":%d}`,
+			int(time.Since(startTime).Seconds()),
+			ingestHandler.ActiveDriverCount(),
+		)
 	})
 
 	// Trip registration

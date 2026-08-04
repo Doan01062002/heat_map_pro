@@ -32,8 +32,15 @@ type cellJSON struct {
 
 // RedisPublisher publishes aggregated heatmap data to a Redis Pub/Sub channel.
 type RedisPublisher struct {
-	client  *redis.Client
-	channel string
+	client       *redis.Client
+	channel      string
+	driverCount  DriverCounter
+}
+
+// DriverCounter provides the number of currently active drivers.
+// Defined here (consumer package) per interface-first principle.
+type DriverCounter interface {
+	ActiveDriverCount() int
 }
 
 // NewRedisPublisher creates a new Redis publisher and verifies the connection.
@@ -55,6 +62,11 @@ func NewRedisPublisher(ctx context.Context, cfg *config.Config) (*RedisPublisher
 		client:  client,
 		channel: cfg.RedisChannel,
 	}, nil
+}
+
+// SetDriverCounter sets the driver counter for including active driver count in updates.
+func (p *RedisPublisher) SetDriverCounter(dc DriverCounter) {
+	p.driverCount = dc
 }
 
 // StartFlushLoop runs a background loop that snapshots the aggregator
@@ -101,8 +113,12 @@ func (p *RedisPublisher) flush(ctx context.Context, agg *aggregator.Aggregator) 
 	update := heatmapUpdateJSON{
 		Cells:           cells,
 		ServerTimestamp:  now,
-		TotalDrivers:    0, // TODO: Get from ingestion handler
+		TotalDrivers:    0,
 		TotalDeviations: totalDeviations,
+	}
+
+	if p.driverCount != nil {
+		update.TotalDrivers = uint32(p.driverCount.ActiveDriverCount())
 	}
 
 	data, err := json.Marshal(update)

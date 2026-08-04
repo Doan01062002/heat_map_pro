@@ -1,114 +1,134 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+
 /**
- * useHeatmapStream — WebSocket hook for receiving real-time heatmap updates.
+ * useHeatmapStream — WebSocket hook for receiving live heatmap updates.
  *
- * Connects to ws://host/ws/admin and accumulates H3 cell data.
- * The backend pushes HeatmapUpdate JSON every 1 second.
+ * Connects to the admin WebSocket endpoint. Accumulates cells with a
+ * 5-minute TTL (stale cells are removed automatically).
  *
- * Returns:
- * - cells: Map<string, { h3_index, intensity, last_updated }> — current cell state
- * - stats: { totalDrivers, totalDeviations, cellCount }
- * - connectionStatus: 'connected' | 'connecting' | 'disconnected' | 'error'
+ * @param {string} url - WebSocket URL (ws://host:port/ws/admin)
+ * @param {boolean} enabled - Whether to connect (false when in history mode)
  */
-import { useEffect, useRef, useState, useCallback } from 'react';
-
-const RECONNECT_DELAY_MS = 2000;
-const MAX_RECONNECT_DELAY_MS = 30000;
-
-// Cells older than this are faded out (5 minutes)
-const CELL_TTL_MS = 5 * 60 * 1000;
-
-export function useHeatmapStream(url) {
-  const [cells, setCells] = useState(new Map());
+export function useHeatmapStream(url, enabled = true) {
+  const [cells, setCells] = useState([]);
   const [stats, setStats] = useState({
     totalDrivers: 0,
     totalDeviations: 0,
-    cellCount: 0,
+    serverTimestamp: 0,
   });
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
 
   const wsRef = useRef(null);
-  const reconnectDelayRef = useRef(RECONNECT_DELAY_MS);
+  const cellMapRef = useRef(new Map()); // h3_index → cell data
   const reconnectTimerRef = useRef(null);
 
-  const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      return;
-    }
+  const CELL_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-    setConnectionStatus('connecting');
-
-    const ws = new WebSocket(url);
-
-    ws.onopen = () => {
-      setConnectionStatus('connected');
-      reconnectDelayRef.current = RECONNECT_DELAY_MS;
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const update = JSON.parse(event.data);
-        applyUpdate(update);
-      } catch (err) {
-        console.error('[HeatmapStream] Parse error:', err);
-      }
-    };
-
-    ws.onclose = () => {
-      setConnectionStatus('disconnected');
-      wsRef.current = null;
-
-      const delay = reconnectDelayRef.current;
-      reconnectDelayRef.current = Math.min(delay * 2, MAX_RECONNECT_DELAY_MS);
-      reconnectTimerRef.current = setTimeout(connect, delay);
-    };
-
-    ws.onerror = () => {
-      setConnectionStatus('error');
-    };
-
-    wsRef.current = ws;
-  }, [url]);
-
-  const applyUpdate = useCallback((update) => {
-    const now = Date.now();
-
-    setCells((prevCells) => {
-      const newCells = new Map(prevCells);
-
-      // Apply incoming cell updates
-      for (const cell of update.cells) {
-        const existing = newCells.get(cell.h3_index);
-        newCells.set(cell.h3_index, {
-          h3_index: cell.h3_index,
-          intensity: (existing?.intensity || 0) + cell.intensity,
-          last_updated: cell.last_updated,
-        });
-      }
-
-      // Expire old cells (older than 5 minutes)
-      for (const [key, cell] of newCells) {
-        if (now - cell.last_updated > CELL_TTL_MS) {
-          newCells.delete(key);
-        }
-      }
-
-      return newCells;
-    });
-
-    setStats({
-      totalDrivers: update.total_drivers || 0,
-      totalDeviations: update.total_deviations || 0,
-      cellCount: update.cells?.length || 0,
-    });
+  const clearCells = useCallback(() => {
+    cellMapRef.current.clear();
+    setCells([]);
+    setStats({ totalDrivers: 0, totalDeviations: 0, serverTimestamp: 0 });
   }, []);
 
   useEffect(() => {
-    connect();
-    return () => {
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      if (wsRef.current) wsRef.current.close();
-    };
-  }, [connect]);
+    if (!enabled) {
+      // Disconnect when not in live mode
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      setConnectionStatus('disconnected');
+      return;
+    }
 
-  return { cells, stats, connectionStatus };
+    function connect() {
+      setConnectionStatus('connecting');
+
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setConnectionStatus('connected');
+        console.log('[HeatmapStream] Connected to', url);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const update = JSON.parse(event.data);
+          const now = Date.now();
+
+          // Update stats
+          setStats({
+            totalDrivers: update.total_drivers || 0,
+            totalDeviations: update.total_deviations || 0,
+            serverTimestamp: update.server_timestamp || now,
+          });
+
+          // Merge new cells into cell map
+          const cellMap = cellMapRef.current;
+          if (update.cells && update.cells.length > 0) {
+            for (const cell of update.cells) {
+              const existing = cellMap.get(cell.h3_index);
+              if (existing) {
+                // Accumulate intensity
+                cellMap.set(cell.h3_index, {
+                  ...cell,
+                  intensity: existing.intensity + cell.intensity,
+                  last_updated: now,
+                  _receivedAt: now,
+                });
+              } else {
+                cellMap.set(cell.h3_index, {
+                  ...cell,
+                  last_updated: now,
+                  _receivedAt: now,
+                });
+              }
+            }
+          }
+
+          // Evict stale cells (older than TTL)
+          for (const [key, val] of cellMap) {
+            if (now - val._receivedAt > CELL_TTL_MS) {
+              cellMap.delete(key);
+            }
+          }
+
+          // Update React state
+          setCells(Array.from(cellMap.values()));
+        } catch (err) {
+          console.error('[HeatmapStream] Parse error:', err);
+        }
+      };
+
+      ws.onclose = () => {
+        setConnectionStatus('disconnected');
+        wsRef.current = null;
+
+        // Auto-reconnect after 3 seconds
+        if (enabled) {
+          reconnectTimerRef.current = setTimeout(connect, 3000);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error('[HeatmapStream] WebSocket error:', err);
+        ws.close();
+      };
+    }
+
+    connect();
+
+    return () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+      }
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    };
+  }, [url, enabled]);
+
+  return { cells, stats, connectionStatus, clearCells };
 }

@@ -1,66 +1,88 @@
-import React, { useMemo } from 'react';
-import DeckGL from '@deck.gl/react';
-import { Map } from 'maplibre-gl';
-import { createHeatmapLayer } from './HeatmapLayer';
+import React, { useRef, useEffect, useState } from 'react';
+import HeatmapLayer from './HeatmapLayer';
 
 /**
- * MapContainer — Combines MapLibre base map with Deck.gl heatmap overlay.
- *
- * Props:
- * @param {Map<string, { h3_index: string, intensity: number }>} cells - H3 cell data
+ * MapContainer — MapLibre base map with Deck.gl heatmap overlay.
+ * Uses Carto dark-matter basemap (free, no API key).
  */
 
-// Ho Chi Minh City center
-const INITIAL_VIEW_STATE = {
-  longitude: 106.7009,
-  latitude: 10.7769,
-  zoom: 12,
-  pitch: 45,
-  bearing: -17,
-  maxZoom: 18,
-  minZoom: 8,
-};
+const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+const HCMC_CENTER = [106.7009, 10.7769];
 
-// Free dark map style (no API key needed)
-const MAP_STYLE =
-  import.meta.env.VITE_MAP_STYLE ||
-  'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+export default function MapContainer({ cells = [] }) {
+  const containerRef = useRef(null);
+  const mapRef = useRef(null);
+  const [mapLoaded, setMapLoaded] = useState(false);
 
-export default function MapContainer({ cells }) {
-  const layers = useMemo(() => {
-    if (!cells || cells.size === 0) return [];
-    return [createHeatmapLayer(cells)];
-  }, [cells]);
+  // Initialize MapLibre
+  useEffect(() => {
+    let map;
+
+    async function init() {
+      const maplibregl = (await import('maplibre-gl')).default;
+
+      // CSS
+      if (!document.getElementById('maplibre-css')) {
+        const link = document.createElement('link');
+        link.id = 'maplibre-css';
+        link.rel = 'stylesheet';
+        link.href = 'https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css';
+        document.head.appendChild(link);
+      }
+
+      map = new maplibregl.Map({
+        container: containerRef.current,
+        style: MAP_STYLE,
+        center: HCMC_CENTER,
+        zoom: 12,
+        pitch: 45,
+        bearing: -15,
+        attributionControl: false,
+      });
+
+      map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+      map.on('load', () => {
+        mapRef.current = map;
+        setMapLoaded(true);
+      });
+    }
+
+    init();
+    return () => { if (map) map.remove(); };
+  }, []);
 
   return (
-    <DeckGL
-      initialViewState={INITIAL_VIEW_STATE}
-      controller={true}
-      layers={layers}
-      getTooltip={({ object }) => {
-        if (!object) return null;
-        return {
-          html: `
-            <div style="font-family: Inter, sans-serif; font-size: 12px;">
-              <strong>H3 Cell</strong><br/>
-              Index: ${object.h3_index}<br/>
-              Deviations: <strong style="color: #ff6b6b;">${object.intensity}</strong>
-            </div>
-          `,
-          style: {
-            backgroundColor: '#1a1a2e',
-            color: '#e0e0e0',
-            borderRadius: '8px',
-            padding: '8px 12px',
-            border: '1px solid #30363d',
-          },
-        };
-      }}
-      style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
-    >
-      {/* MapLibre base map */}
-      {/* Note: In deck.gl v9, use the Map component directly */}
-      {/* TODO: Add MapLibre Map component here */}
-    </DeckGL>
+    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+      <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+
+      {/* Render heatmap overlay when map is ready */}
+      {mapLoaded && mapRef.current && (
+        <HeatmapLayer
+          map={mapRef.current}
+          cells={cells}
+        />
+      )}
+
+      {/* Title overlay */}
+      <div style={{
+        position: 'absolute',
+        top: '16px',
+        left: '16px',
+        background: 'rgba(0,0,0,0.7)',
+        color: '#fff',
+        padding: '10px 16px',
+        borderRadius: '10px',
+        backdropFilter: 'blur(10px)',
+        border: '1px solid rgba(255,255,255,0.08)',
+      }}>
+        <div style={{ fontSize: '16px', fontWeight: 700 }}>
+          🗺️ Deviation Heatmap
+        </div>
+        <div style={{ fontSize: '11px', color: '#888', marginTop: '2px' }}>
+          Ho Chi Minh City — Real-time
+        </div>
+      </div>
+    </div>
   );
 }
