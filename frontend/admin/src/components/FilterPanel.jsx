@@ -162,10 +162,10 @@ export default function FilterPanel({
           Intensity Legend
         </div>
         {[
-          { color: '#00ff80', label: 'Low (1–5)' },
-          { color: '#ffff00', label: 'Medium (6–15)' },
-          { color: '#ff8800', label: 'High (16–30)' },
-          { color: '#ff0040', label: 'Critical (30+)' },
+          { color: '#00e664', label: 'Low deviation' },
+          { color: '#ccee00', label: 'Medium deviation' },
+          { color: '#ff8800', label: 'High deviation' },
+          { color: '#ff0022', label: 'Critical deviation' },
         ].map(({ color, label }) => (
           <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
             <div style={{
@@ -177,6 +177,13 @@ export default function FilterPanel({
             <span style={{ color: '#888', fontSize: '12px' }}>{label}</span>
           </div>
         ))}
+        <div style={{ marginTop: '12px', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '10px' }}>
+          <div style={{ color: '#555', fontSize: '11px', lineHeight: 1.6 }}>
+            🛤️ Zoom in to see trajectory lines on roads
+          </div>
+        </div>
+      </div>
+
       </div>
 
       {/* Footer */}

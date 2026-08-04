@@ -2,26 +2,23 @@ import React, { useRef, useEffect, useState } from 'react';
 import HeatmapLayer from './HeatmapLayer';
 
 /**
- * MapContainer — MapLibre base map with Deck.gl heatmap overlay.
+ * MapContainer — MapLibre base map with road-following heatmap overlay.
  * Uses Carto dark-matter basemap (free, no API key).
  */
 
 const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 const PORTO_CENTER = [-8.6291, 41.1579];
 
-export default function MapContainer({ cells = [] }) {
+export default function MapContainer({ points = [], trajectories = null }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const [mapLoaded, setMapLoaded] = useState(false);
 
-  // Initialize MapLibre
   useEffect(() => {
     let map;
-
     async function init() {
       const maplibregl = (await import('maplibre-gl')).default;
 
-      // CSS
       if (!document.getElementById('maplibre-css')) {
         const link = document.createElement('link');
         link.id = 'maplibre-css';
@@ -35,11 +32,13 @@ export default function MapContainer({ cells = [] }) {
         style: MAP_STYLE,
         center: PORTO_CENTER,
         zoom: 12,
-        pitch: 45,
-        bearing: -15,
+        pitch: 0,
+        bearing: 0,
         attributionControl: false,
       });
 
+      // Store maplibregl reference for popups
+      map._maplibregl = maplibregl;
       map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
       map.on('load', () => {
@@ -56,11 +55,11 @@ export default function MapContainer({ cells = [] }) {
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
 
-      {/* Render heatmap overlay when map is ready */}
       {mapLoaded && mapRef.current && (
         <HeatmapLayer
           map={mapRef.current}
-          cells={cells}
+          points={points}
+          trajectories={trajectories}
         />
       )}
 
@@ -69,14 +68,15 @@ export default function MapContainer({ cells = [] }) {
         position: 'absolute',
         top: '16px',
         left: '16px',
-        background: 'rgba(0,0,0,0.7)',
+        background: 'rgba(0,0,0,0.72)',
         color: '#fff',
         padding: '10px 16px',
         borderRadius: '10px',
         backdropFilter: 'blur(10px)',
         border: '1px solid rgba(255,255,255,0.08)',
+        zIndex: 5,
       }}>
-        <div style={{ fontSize: '16px', fontWeight: 700 }}>
+        <div style={{ fontSize: '15px', fontWeight: 700 }}>
           🗺️ Deviation Heatmap
         </div>
         <div style={{ fontSize: '11px', color: '#888', marginTop: '2px' }}>

@@ -313,3 +313,177 @@ func (w *PostgresWriter) HandleDeviationsQuery(wr http.ResponseWriter, r *http.R
 func (w *PostgresWriter) Close() {
 	w.pool.Close()
 }
+
+// HandlePointsQuery handles GET /api/points?from=<ms>&to=<ms>&limit=<n>
+// Returns raw GPS coordinates for heatmap rendering — naturally on roads.
+func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Request) {
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+	limitStr := r.URL.Query().Get("limit")
+
+	if fromStr == "" || toStr == "" {
+		http.Error(wr, `{"error":"from and to query parameters are required (unix milliseconds)"}`, http.StatusBadRequest)
+		return
+	}
+
+	fromMS, err := strconv.ParseInt(fromStr, 10, 64)
+	if err != nil {
+		http.Error(wr, `{"error":"invalid 'from' parameter"}`, http.StatusBadRequest)
+		return
+	}
+	toMS, err := strconv.ParseInt(toStr, 10, 64)
+	if err != nil {
+		http.Error(wr, `{"error":"invalid 'to' parameter"}`, http.StatusBadRequest)
+		return
+	}
+
+	limit := 50000
+	if limitStr != "" {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 && n <= 200000 {
+			limit = n
+		}
+	}
+
+	rows, err := w.pool.Query(r.Context(), `
+		SELECT latitude, longitude, deviation_meters
+		FROM deviation_events
+		WHERE created_at >= $1 AND created_at <= $2
+		ORDER BY deviation_meters DESC
+		LIMIT $3
+	`, time.UnixMilli(fromMS), time.UnixMilli(toMS), limit)
+	if err != nil {
+		slog.Error("points query failed", "error", err)
+		http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type point struct {
+		Lat       float64 `json:"lat"`
+		Lng       float64 `json:"lng"`
+		Deviation float64 `json:"deviation"`
+	}
+
+	points := make([]point, 0, 1024)
+	for rows.Next() {
+		var p point
+		if err := rows.Scan(&p.Lat, &p.Lng, &p.Deviation); err != nil {
+			continue
+		}
+		points = append(points, p)
+	}
+
+	wr.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(wr).Encode(map[string]interface{}{
+		"points":      points,
+		"total":       len(points),
+		"from":        fromMS,
+		"to":          toMS,
+	})
+}
+
+// HandleTrajectoriesQuery handles GET /api/trajectories?from=<ms>&to=<ms>&limit=<n>
+// Returns per-trip GPS paths as GeoJSON LineString features.
+func (w *PostgresWriter) HandleTrajectoriesQuery(wr http.ResponseWriter, r *http.Request) {
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+	limitStr := r.URL.Query().Get("limit")
+
+	if fromStr == "" || toStr == "" {
+		http.Error(wr, `{"error":"from and to query parameters are required (unix milliseconds)"}`, http.StatusBadRequest)
+		return
+	}
+
+	fromMS, err := strconv.ParseInt(fromStr, 10, 64)
+	if err != nil {
+		http.Error(wr, `{"error":"invalid 'from' parameter"}`, http.StatusBadRequest)
+		return
+	}
+	toMS, err := strconv.ParseInt(toStr, 10, 64)
+	if err != nil {
+		http.Error(wr, `{"error":"invalid 'to' parameter"}`, http.StatusBadRequest)
+		return
+	}
+
+	limit := 500
+	if limitStr != "" {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 && n <= 2000 {
+			limit = n
+		}
+	}
+
+	// Fetch top N trips by point count, ordered by time
+	rows, err := w.pool.Query(r.Context(), `
+		SELECT trip_id, driver_id,
+		       array_agg(longitude ORDER BY created_at) AS lngs,
+		       array_agg(latitude  ORDER BY created_at) AS lats,
+		       AVG(deviation_meters)::FLOAT8            AS avg_deviation,
+		       COUNT(*)::INT                            AS point_count
+		FROM deviation_events
+		WHERE created_at >= $1 AND created_at <= $2
+		GROUP BY trip_id, driver_id
+		HAVING COUNT(*) >= 3
+		ORDER BY COUNT(*) DESC
+		LIMIT $3
+	`, time.UnixMilli(fromMS), time.UnixMilli(toMS), limit)
+	if err != nil {
+		slog.Error("trajectories query failed", "error", err)
+		http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type Feature struct {
+		Type     string                 `json:"type"`
+		Geometry map[string]interface{} `json:"geometry"`
+		Props    map[string]interface{} `json:"properties"`
+	}
+
+	features := make([]Feature, 0, 256)
+	for rows.Next() {
+		var tripID, driverID string
+		var lngs, lats []float64
+		var avgDev float64
+		var ptCount int
+
+		if err := rows.Scan(&tripID, &driverID, &lngs, &lats, &avgDev, &ptCount); err != nil {
+			continue
+		}
+		if len(lngs) != len(lats) || len(lngs) < 2 {
+			continue
+		}
+
+		coords := make([][2]float64, len(lngs))
+		for i := range lngs {
+			coords[i] = [2]float64{lngs[i], lats[i]}
+		}
+
+		features = append(features, Feature{
+			Type: "Feature",
+			Geometry: map[string]interface{}{
+				"type":        "LineString",
+				"coordinates": coords,
+			},
+			Props: map[string]interface{}{
+				"trip_id":      tripID,
+				"driver_id":    driverID,
+				"avg_deviation": avgDev,
+				"point_count":  ptCount,
+			},
+		})
+	}
+
+	geojson := map[string]interface{}{
+		"type":     "FeatureCollection",
+		"features": features,
+	}
+
+	wr.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(wr).Encode(map[string]interface{}{
+		"geojson": geojson,
+		"total":   len(features),
+		"from":    fromMS,
+		"to":      toMS,
+	})
+}
+

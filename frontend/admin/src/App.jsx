@@ -8,51 +8,72 @@ import { useHeatmapStream } from './hooks/useHeatmapStream';
  * App — Admin Dashboard root component.
  *
  * Data flow:
- * 1. useHeatmapStream subscribes to WebSocket for live heatmap updates
- * 2. HeatmapLayer renders H3 hexagon cells on MapLibre via Deck.gl
- * 3. FilterPanel toggles live/history mode and date range
- * 4. StatsOverlay shows real-time KPIs
+ * - History mode: fetch raw GPS points + trajectories from REST API
+ *   → MapContainer renders smooth road-following heatmap + trajectory lines
+ * - Live mode: subscribe to WebSocket for real-time heatmap updates
  */
+
+const PORTO_FROM = 1372636800000; // 2013-07-01
+const PORTO_TO   = 1377907200000; // 2013-08-31
+
 export default function App() {
-  const [mode, setMode] = useState('history'); // Start in history mode to show Porto data
-  const [dateRange, setDateRange] = useState({ from: null, to: null });
+  const [mode, setMode] = useState('history');
 
-  const wsUrl = import.meta.env.VITE_ADMIN_WS_URL || 'ws://localhost:8080/ws/admin';
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+  const wsUrl  = import.meta.env.VITE_ADMIN_WS_URL || 'ws://localhost:8080/ws/admin';
+  const apiUrl = import.meta.env.VITE_API_URL       || 'http://localhost:8080';
 
-  const {
-    cells,
-    stats,
-    connectionStatus,
-    clearCells,
-  } = useHeatmapStream(wsUrl, mode === 'live');
+  // ── Live WebSocket stream ─────────────────────────────────────────────────
+  const { cells: liveCells, stats: liveStats, connectionStatus, clearCells } =
+    useHeatmapStream(wsUrl, mode === 'live');
 
-  // History mode: fetch from REST API
-  const [historyCells, setHistoryCells] = useState([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
+  // ── History state ─────────────────────────────────────────────────────────
+  const [historyPoints,      setHistoryPoints]      = useState([]);
+  const [historyTrajectories, setHistoryTrajectories] = useState(null);
+  const [historyStats,       setHistoryStats]       = useState({ totalPoints: 0, totalTrips: 0 });
+  const [historyLoading,     setHistoryLoading]     = useState(false);
+  const [dateRange,          setDateRange]          = useState({ from: null, to: null });
 
-  const handleFetchHistory = async (from, to) => {
+  const fetchHistory = async (fromMs, toMs) => {
     setHistoryLoading(true);
     try {
-      const res = await fetch(`${apiUrl}/api/history?from=${from}&to=${to}`);
-      const data = await res.json();
-      setHistoryCells(data.cells || []);
+      // Fetch raw GPS points (up to 75 000 — full dataset)
+      const [ptRes, trRes] = await Promise.all([
+        fetch(`${apiUrl}/api/points?from=${fromMs}&to=${toMs}&limit=75000`),
+        fetch(`${apiUrl}/api/trajectories?from=${fromMs}&to=${toMs}&limit=2000`),
+      ]);
+
+      const ptData = await ptRes.json();
+      const trData = await trRes.json();
+
+      setHistoryPoints(ptData.points || []);
+      setHistoryTrajectories(trData.geojson || null);
+      setHistoryStats({
+        totalPoints: ptData.total || 0,
+        totalTrips:  trData.total  || 0,
+      });
     } catch (err) {
       console.error('Failed to fetch history:', err);
-      setHistoryCells([]);
+      setHistoryPoints([]);
+      setHistoryTrajectories(null);
     } finally {
       setHistoryLoading(false);
     }
   };
 
-  // Auto-load Porto taxi data on mount (July 2013 timerange)
+  // Auto-load Porto taxi data on mount
   useEffect(() => {
-    const portoFrom = 1372636800000; // 2013-07-01T00:00:00Z
-    const portoTo = 1377907200000;   // 2013-08-31T00:00:00Z
-    handleFetchHistory(portoFrom, portoTo);
+    fetchHistory(PORTO_FROM, PORTO_TO);
   }, []);
 
-  const activeCells = mode === 'live' ? cells : historyCells;
+  // ── Derive active data based on mode ────────────────────────────────────
+  const activePoints       = mode === 'live' ? [] : historyPoints;
+  const activeTrajectories = mode === 'live' ? null : historyTrajectories;
+  const activeStats        = mode === 'live'
+    ? { totalDrivers: liveStats.totalDrivers, totalDeviations: liveStats.totalDeviations, hotCells: liveCells.length }
+    : { totalDrivers: historyStats.totalTrips, totalDeviations: historyStats.totalPoints, hotCells: historyStats.totalTrips };
+
+  // Handler for FilterPanel "Fetch History" button
+  const handleFetchHistory = (from, to) => fetchHistory(from, to);
 
   return (
     <div style={{
@@ -66,10 +87,7 @@ export default function App() {
         mode={mode}
         onModeChange={(m) => {
           setMode(m);
-          if (m === 'live') {
-            setHistoryCells([]);
-            clearCells();
-          }
+          if (m === 'live') clearCells();
         }}
         dateRange={dateRange}
         onDateRangeChange={setDateRange}
@@ -80,12 +98,39 @@ export default function App() {
 
       {/* Map Area */}
       <div style={{ flex: 1, position: 'relative' }}>
-        <MapContainer cells={activeCells} />
+        <MapContainer
+          points={activePoints}
+          trajectories={activeTrajectories}
+        />
+
+        {/* Loading overlay */}
+        {historyLoading && (
+          <div style={{
+            position: 'absolute', inset: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'rgba(0,0,0,0.55)',
+            zIndex: 20,
+          }}>
+            <div style={{
+              background: 'rgba(15,12,41,0.95)',
+              border: '1px solid rgba(108,99,255,0.3)',
+              borderRadius: '16px',
+              padding: '28px 36px',
+              textAlign: 'center',
+              color: '#e0e0ff',
+            }}>
+              <div style={{ fontSize: '32px', marginBottom: '12px' }}>⏳</div>
+              <div style={{ fontSize: '16px', fontWeight: 700 }}>Loading trajectory data…</div>
+              <div style={{ fontSize: '12px', color: '#666', marginTop: '6px' }}>
+                Fetching GPS points & trajectories
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Stats Overlay */}
         <StatsOverlay
-          stats={stats}
-          cellCount={activeCells.length}
+          stats={activeStats}
           mode={mode}
           connectionStatus={connectionStatus}
         />

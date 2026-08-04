@@ -2,13 +2,22 @@ import React from 'react';
 
 /**
  * StatsOverlay — Glassmorphism KPI cards floating over the map.
+ * Supports both live mode (drivers/deviations) and history mode (trips/points).
  */
-export default function StatsOverlay({ stats, cellCount, mode, connectionStatus }) {
-  const cards = [
-    { label: 'Active Drivers', value: stats.totalDrivers || 0, color: '#6c63ff', icon: '🚗' },
-    { label: 'Deviations', value: stats.totalDeviations || 0, color: '#ff4444', icon: '⚠️' },
-    { label: 'Hot Cells', value: cellCount, color: '#ff9f43', icon: '🔥' },
-  ];
+export default function StatsOverlay({ stats, mode, connectionStatus }) {
+  const isLive = mode === 'live';
+
+  const cards = isLive
+    ? [
+        { label: 'Active Drivers',   value: stats.totalDrivers   || 0, color: '#6c63ff', icon: '🚗' },
+        { label: 'Deviations',       value: stats.totalDeviations || 0, color: '#ff4444', icon: '⚠️' },
+        { label: 'Hot Cells',        value: stats.hotCells        || 0, color: '#ff9f43', icon: '🔥' },
+      ]
+    : [
+        { label: 'Trips Loaded',     value: stats.totalDrivers   || 0, color: '#6c63ff', icon: '🛤️' },
+        { label: 'GPS Points',       value: stats.totalDeviations || 0, color: '#ff4444', icon: '📍' },
+        { label: 'Trajectories',     value: stats.hotCells        || 0, color: '#ff9f43', icon: '🔥' },
+      ];
 
   return (
     <div style={{
@@ -53,10 +62,8 @@ export default function StatsOverlay({ stats, cellCount, mode, connectionStatus 
 
       {/* Mode badge */}
       <div style={{
-        background: mode === 'live'
-          ? 'rgba(68,255,68,0.1)'
-          : 'rgba(108,99,255,0.1)',
-        border: `1px solid ${mode === 'live' ? 'rgba(68,255,68,0.25)' : 'rgba(108,99,255,0.25)'}`,
+        background: isLive ? 'rgba(68,255,68,0.1)' : 'rgba(108,99,255,0.1)',
+        border: `1px solid ${isLive ? 'rgba(68,255,68,0.25)' : 'rgba(108,99,255,0.25)'}`,
         borderRadius: '12px',
         padding: '12px 14px',
         display: 'flex',
@@ -68,12 +75,12 @@ export default function StatsOverlay({ stats, cellCount, mode, connectionStatus 
         <div style={{
           fontSize: '12px',
           fontWeight: 700,
-          color: mode === 'live' ? '#44ff44' : '#8888ff',
+          color: isLive ? '#44ff44' : '#8888ff',
         }}>
-          {mode === 'live' ? '● LIVE' : '📅 HISTORY'}
+          {isLive ? '● LIVE' : '📅 HISTORY'}
         </div>
         <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>
-          {mode === 'live' ? connectionStatus : 'static'}
+          {isLive ? connectionStatus : 'Porto 2013'}
         </div>
       </div>
     </div>

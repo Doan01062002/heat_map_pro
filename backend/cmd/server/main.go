@@ -123,6 +123,12 @@ func main() {
 	// Driver deviation events query
 	mux.HandleFunc("GET /api/deviations", pgWriter.HandleDeviationsQuery)
 
+	// Raw GPS points for heatmap (naturally road-following)
+	mux.HandleFunc("GET /api/points", pgWriter.HandlePointsQuery)
+
+	// Per-trip GPS trajectories as GeoJSON LineStrings
+	mux.HandleFunc("GET /api/trajectories", pgWriter.HandleTrajectoriesQuery)
+
 	// WebSocket: Driver GPS ingestion
 	mux.HandleFunc("/ws/driver", ingestHandler.HandleWebSocket)
 
