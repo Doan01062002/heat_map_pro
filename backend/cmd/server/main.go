@@ -129,6 +129,9 @@ func main() {
 	// Per-trip GPS trajectories as GeoJSON LineStrings
 	mux.HandleFunc("GET /api/trajectories", pgWriter.HandleTrajectoriesQuery)
 
+	// Road segment statistics for map click popup (Vietnamese stats)
+	mux.HandleFunc("GET /api/road-stats", pgWriter.HandleRoadStatsQuery)
+
 	// WebSocket: Driver GPS ingestion
 	mux.HandleFunc("/ws/driver", ingestHandler.HandleWebSocket)
 

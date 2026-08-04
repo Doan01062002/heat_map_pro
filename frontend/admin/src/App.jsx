@@ -19,9 +19,10 @@ export default function App() {
     useHeatmapStream(wsUrl, mode === 'live');
 
   // History data
-  const [historyPoints,  setHistoryPoints]  = useState([]);
-  const [historyTrips,   setHistoryTrips]   = useState([]);
-  const [historyStats,   setHistoryStats]   = useState({ totalPoints: 0, totalTrips: 0 });
+  const [historyPoints,      setHistoryPoints]      = useState([]);
+  const [historyTrips,       setHistoryTrips]       = useState([]);
+  const [historyTrajectories, setHistoryTrajectories] = useState([]);
+  const [historyStats,       setHistoryStats]       = useState({ totalPoints: 0, totalTrips: 0 });
   const [historyLoading, setHistoryLoading] = useState(false);
   const [dateRange,      setDateRange]      = useState({ from: null, to: null });
 
@@ -52,6 +53,7 @@ export default function App() {
         coords: f.geometry.coordinates,
       }));
       setHistoryTrips(trips);
+      setHistoryTrajectories(trips); // same structure, used by HeatmapLayer for line rendering
       setHistoryStats({ totalPoints: ptData.total || 0, totalTrips: trips.length });
     } catch (err) {
       console.error('History fetch failed:', err);
@@ -125,6 +127,7 @@ export default function App() {
       <div style={{ flex: 1, position: 'relative' }}>
         <MapContainer
           points={activePoints}
+          trajectories={mode === 'history' ? historyTrajectories : []}
           selectedTrip={selectedTrip}
         />
 

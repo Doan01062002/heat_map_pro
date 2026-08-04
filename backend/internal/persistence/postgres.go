@@ -487,3 +487,97 @@ func (w *PostgresWriter) HandleTrajectoriesQuery(wr http.ResponseWriter, r *http
 	})
 }
 
+// HandleRoadStatsQuery returns aggregated statistics for GPS events near a map click point.
+// Query params: lat, lng (required), radius (meters, default 120, max 400).
+// Used for the "click on road segment → show Vietnamese stats popup" feature.
+func (w *PostgresWriter) HandleRoadStatsQuery(wr http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		wr.WriteHeader(http.StatusOK)
+		return
+	}
+
+	latStr := r.URL.Query().Get("lat")
+	lngStr := r.URL.Query().Get("lng")
+	radiusStr := r.URL.Query().Get("radius")
+
+	lat, err := strconv.ParseFloat(latStr, 64)
+	if err != nil {
+		http.Error(wr, "invalid lat", http.StatusBadRequest)
+		return
+	}
+	lng, err := strconv.ParseFloat(lngStr, 64)
+	if err != nil {
+		http.Error(wr, "invalid lng", http.StatusBadRequest)
+		return
+	}
+	radius := 120.0
+	if radiusStr != "" {
+		if v, err := strconv.ParseFloat(radiusStr, 64); err == nil && v > 0 && v <= 400 {
+			radius = v
+		}
+	}
+
+	// Haversine distance in metres (pure SQL, no PostGIS required)
+	const query = `
+		SELECT
+			COUNT(*)                                                               AS total_events,
+			COUNT(DISTINCT trip_id)                                                AS unique_trips,
+			COUNT(DISTINCT driver_id)                                              AS unique_drivers,
+			COALESCE(ROUND(AVG(deviation_meters)::NUMERIC, 1), 0)::FLOAT8         AS avg_deviation,
+			COALESCE(ROUND(MAX(deviation_meters)::NUMERIC, 1), 0)::FLOAT8         AS max_deviation,
+			COUNT(CASE WHEN deviation_meters > 50  THEN 1 END)                    AS high_dev_events,
+			COUNT(DISTINCT CASE WHEN deviation_meters > 50  THEN trip_id END)     AS high_dev_trips
+		FROM deviation_events
+		WHERE (
+			6371000.0 * acos(GREATEST(-1.0, LEAST(1.0,
+				cos(radians($1)) * cos(radians(latitude))  *
+				cos(radians(longitude) - radians($2)) +
+				sin(radians($1)) * sin(radians(latitude))
+			)))
+		) <= $3
+	`
+
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+
+	row := w.pool.QueryRow(ctx, query, lat, lng, radius)
+
+	var (
+		totalEvents   int64
+		uniqueTrips   int64
+		uniqueDrivers int64
+		avgDeviation  float64
+		maxDeviation  float64
+		highDevEvents int64
+		highDevTrips  int64
+	)
+
+	if err := row.Scan(&totalEvents, &uniqueTrips, &uniqueDrivers,
+		&avgDeviation, &maxDeviation, &highDevEvents, &highDevTrips); err != nil {
+		slog.Error("road-stats query failed", "err", err)
+		http.Error(wr, "query error", http.StatusInternalServerError)
+		return
+	}
+
+	normalTrips := uniqueTrips - highDevTrips
+	var avoidRatio float64
+	if uniqueTrips > 0 {
+		avoidRatio = float64(highDevTrips) / float64(uniqueTrips) * 100
+	}
+
+	wr.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(wr).Encode(map[string]interface{}{
+		"lat":            lat,
+		"lng":            lng,
+		"radius_m":       radius,
+		"total_events":   totalEvents,
+		"unique_trips":   uniqueTrips,
+		"unique_drivers": uniqueDrivers,
+		"avg_deviation":  avgDeviation,
+		"max_deviation":  maxDeviation,
+		"high_dev_events": highDevEvents,
+		"high_dev_trips":  highDevTrips,
+		"normal_trips":   normalTrips,
+		"avoid_ratio":    avoidRatio,
+	})
+}

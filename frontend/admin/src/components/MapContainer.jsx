@@ -9,7 +9,7 @@ import HeatmapLayer from './HeatmapLayer';
 const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 const PORTO_CENTER = [-8.6291, 41.1579];
 
-export default function MapContainer({ points = [], trajectories = null, selectedTrip = null }) {
+export default function MapContainer({ points = [], trajectories = [], selectedTrip = null }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -59,6 +59,7 @@ export default function MapContainer({ points = [], trajectories = null, selecte
         <HeatmapLayer
           map={mapRef.current}
           points={points}
+          trajectories={trajectories}
           selectedTrip={selectedTrip}
         />
       )}
