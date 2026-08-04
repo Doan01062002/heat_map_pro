@@ -40,7 +40,7 @@ export default function DriverList({ trips = [], selectedTripId, onSelectTrip, l
         borderBottom: '1px solid rgba(255,255,255,0.06)',
       }}>
         <div style={{ color: '#777', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '10px' }}>
-          🚕 Trip List
+          Trip List
           {loading && <span style={{ marginLeft: '8px', color: '#555' }}>loading…</span>}
         </div>
 
@@ -65,7 +65,7 @@ export default function DriverList({ trips = [], selectedTripId, onSelectTrip, l
 
         {/* Sort toggle */}
         <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
-          {[['deviation', '⚠️ Deviation'], ['points', '📍 Points']].map(([key, label]) => (
+          {[['deviation', 'Deviation'], ['points', 'Points']].map(([key, label]) => (
             <button
               key={key}
               onClick={() => setSortBy(key)}
@@ -122,7 +122,7 @@ export default function DriverList({ trips = [], selectedTripId, onSelectTrip, l
               {/* Driver ID */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ color: '#c0c0e0', fontSize: '12px', fontWeight: 600 }}>
-                  🚗 {trip.driver_id.replace('taxi-', '')}
+                  {trip.driver_id.replace('taxi-', 'Taxi ')}
                 </span>
                 <span style={{
                   fontSize: '11px', fontWeight: 700, color,
@@ -153,7 +153,7 @@ export default function DriverList({ trips = [], selectedTripId, onSelectTrip, l
                   color: '#8888cc',
                   lineHeight: 1.7,
                 }}>
-                  <div>📍 {trip.point_count} GPS waypoints</div>
+                  <div>{trip.point_count} GPS waypoints</div>
                   <div style={{ color: '#4fc3f7' }}>━━ Planned route (origin→dest)</div>
                   <div style={{ color: '#ff6b35' }}>━━ Actual GPS path</div>
                 </div>

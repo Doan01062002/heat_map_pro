@@ -9,14 +9,14 @@ export default function StatsOverlay({ stats, mode, connectionStatus }) {
 
   const cards = isLive
     ? [
-        { label: 'Active Drivers',   value: stats.totalDrivers   || 0, color: '#6c63ff', icon: '🚗' },
-        { label: 'Deviations',       value: stats.totalDeviations || 0, color: '#ff4444', icon: '⚠️' },
-        { label: 'Hot Cells',        value: stats.hotCells        || 0, color: '#ff9f43', icon: '🔥' },
+        { label: 'Active Drivers',   value: stats.totalDrivers   || 0, color: '#6c63ff' },
+        { label: 'Deviations',       value: stats.totalDeviations || 0, color: '#ff4444' },
+        { label: 'Hot Cells',        value: stats.hotCells        || 0, color: '#ff9f43' },
       ]
     : [
-        { label: 'Trips Loaded',     value: stats.totalDrivers   || 0, color: '#6c63ff', icon: '🛤️' },
-        { label: 'GPS Points',       value: stats.totalDeviations || 0, color: '#ff4444', icon: '📍' },
-        { label: 'Trajectories',     value: stats.hotCells        || 0, color: '#ff9f43', icon: '🔥' },
+        { label: 'Trips Loaded',     value: stats.totalDrivers   || 0, color: '#6c63ff' },
+        { label: 'GPS Points',       value: stats.totalDeviations || 0, color: '#ff4444' },
+        { label: 'Trajectories',     value: stats.hotCells        || 0, color: '#ff9f43' },
       ];
 
   return (
@@ -28,7 +28,7 @@ export default function StatsOverlay({ stats, mode, connectionStatus }) {
       gap: '10px',
       zIndex: 10,
     }}>
-      {cards.map(({ label, value, color, icon }) => (
+      {cards.map(({ label, value, color }) => (
         <div key={label} style={{
           background: 'rgba(10, 10, 30, 0.75)',
           backdropFilter: 'blur(12px)',
@@ -38,7 +38,6 @@ export default function StatsOverlay({ stats, mode, connectionStatus }) {
           minWidth: '100px',
           textAlign: 'center',
         }}>
-          <div style={{ fontSize: '14px', marginBottom: '4px' }}>{icon}</div>
           <div style={{
             fontSize: '22px',
             fontWeight: 800,
@@ -77,7 +76,7 @@ export default function StatsOverlay({ stats, mode, connectionStatus }) {
           fontWeight: 700,
           color: isLive ? '#44ff44' : '#8888ff',
         }}>
-          {isLive ? '● LIVE' : '📅 HISTORY'}
+          {isLive ? 'LIVE' : 'HISTORY'}
         </div>
         <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>
           {isLive ? connectionStatus : 'Porto 2013'}

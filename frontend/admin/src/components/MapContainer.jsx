@@ -77,7 +77,7 @@ export default function MapContainer({ points = [], selectedTrip = null }) {
         zIndex: 5,
       }}>
         <div style={{ fontSize: '15px', fontWeight: 700 }}>
-          🗺️ Deviation Heatmap
+          Deviation Heatmap
         </div>
         <div style={{ fontSize: '11px', color: '#888', marginTop: '2px' }}>
           Porto, Portugal — Taxi Trajectory Analysis

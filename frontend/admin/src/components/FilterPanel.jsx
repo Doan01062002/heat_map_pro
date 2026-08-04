@@ -36,7 +36,6 @@ export default function FilterPanel({
       {/* ── Header ─────────────────────────────────────────────── */}
       <div style={{ padding: '16px', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-          <span style={{ fontSize: '20px' }}>🔥</span>
           <div>
             <div style={{ color: '#e0e0ff', fontWeight: 700, fontSize: '15px' }}>Heatmap Admin</div>
             <div style={{ color: '#444', fontSize: '10px' }}>Driver Deviation Monitor</div>
@@ -73,7 +72,7 @@ export default function FilterPanel({
               background: mode === m ? 'linear-gradient(135deg,#6c63ff,#4834d4)' : 'rgba(255,255,255,0.03)',
               color: mode === m ? '#fff' : '#555',
             }}>
-              {m === 'live' ? '● LIVE' : '📅 History'}
+              {m === 'live' ? 'LIVE' : 'History'}
             </button>
           ))}
         </div>
@@ -112,7 +111,7 @@ export default function FilterPanel({
               fontSize: '12px', fontWeight: 600,
             }}
           >
-            {historyLoading ? '⏳ Loading…' : '🔍 Fetch History'}
+            {historyLoading ? 'Loading…' : 'Fetch History'}
           </button>
         </div>
       )}
@@ -121,7 +120,7 @@ export default function FilterPanel({
       <div style={{
         display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0,
       }}>
-        {[['map', '🗺️ Map'], ['trips', '🚕 Trips']].map(([tab, label]) => (
+        {[['map', 'Map'], ['trips', 'Trips']].map(([tab, label]) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -174,7 +173,7 @@ export default function FilterPanel({
           </div>
 
           <div style={{ marginTop: '12px', color: '#444', fontSize: '11px', lineHeight: 1.6 }}>
-            💡 Switch to <b style={{ color: '#8888cc' }}>Trips tab</b> to select a trip and see its route on the map.
+            Switch to <b style={{ color: '#8888cc' }}>Trips tab</b> to select a trip and see its route on the map.
           </div>
         </div>
       )}
