@@ -184,8 +184,6 @@ export default function FilterPanel({
         </div>
       </div>
 
-      </div>
-
       {/* Footer */}
       <div style={{
         marginTop: 'auto', padding: '12px 20px',
