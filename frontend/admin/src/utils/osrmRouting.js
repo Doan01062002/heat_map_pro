@@ -2,13 +2,15 @@
  * osrmRouting.js — OSRM Public API utilities.
  *
  * Road-Following Route: Snaps GPS traces to road network via /route API
+ *   with BEARING constraints to prevent zigzagging between parallel roads.
  * Planned Route: Optimal driving route via intermediate waypoints
  * Nearest: Snap single point to nearest road
  *
- * NOTE: We use /route instead of /match because:
- *   - /match requires dense GPS (every 1-5s) with small radius
- *   - Porto taxi data has sparse GPS (15s intervals) causing /match to fail with "TooBig"
- *   - /route connects waypoints via the road network, works with any spacing
+ * KEY INSIGHT: Porto taxi GPS is sparse (15s intervals). When GPS points
+ * fall near parallel roads (highway + service road), OSRM without bearings
+ * will zigzag between them. By computing the bearing (heading direction)
+ * from each GPS point to the next, we constrain OSRM to only use roads
+ * that match the vehicle's actual direction of travel.
  */
 
 const OSRM_BASE = 'https://router.project-osrm.org';
@@ -39,40 +41,145 @@ async function fetchWithTimeout(url) {
     const res = await fetch(url, { signal: ctrl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
-  } catch (err) {
-    clearTimeout(t);
-    throw err;
   } finally {
     clearTimeout(t);
   }
 }
 
-// ── Road-Following Route (replaces /match) ───────────────────────────────────
+// ── Bearing Calculation ──────────────────────────────────────────────────────
 
 /**
- * routeChunk — Route through up to 100 waypoints via OSRM /route API.
- * Returns the road-following geometry coordinates or null.
+ * calcBearing — Compute the compass bearing from point A to point B.
+ * @param {number} lng1  longitude of A (degrees)
+ * @param {number} lat1  latitude of A (degrees)
+ * @param {number} lng2  longitude of B (degrees)
+ * @param {number} lat2  latitude of B (degrees)
+ * @returns {number}  bearing in degrees [0, 360)
+ */
+function calcBearing(lng1, lat1, lng2, lat2) {
+  const toRad = d => d * Math.PI / 180;
+  const toDeg = r => r * 180 / Math.PI;
+
+  const dLng = toRad(lng2 - lng1);
+  const phi1 = toRad(lat1);
+  const phi2 = toRad(lat2);
+
+  const x = Math.sin(dLng) * Math.cos(phi2);
+  const y = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLng);
+
+  let bearing = toDeg(Math.atan2(x, y));
+  return (bearing + 360) % 360;  // normalize to [0, 360)
+}
+
+/**
+ * computeBearings — For each waypoint, compute the bearing to the NEXT point.
+ * Last point uses the bearing from previous point (vehicle continues same direction).
  *
- * OSRM /route limit: max 100 waypoints per request.
+ * @param {Array<[number,number]>} coords  [lng,lat][]
+ * @returns {string}  OSRM bearings parameter e.g. "90,45;180,45;..."
+ *   Format: "bearing,range;bearing,range;..."  range=45 means ±45° tolerance
+ */
+function computeBearings(coords) {
+  if (coords.length < 2) return '';
+
+  const RANGE = 45;  // ±45 degree tolerance — wide enough for curves, narrow enough to avoid parallel roads
+  const bearings = [];
+
+  for (let i = 0; i < coords.length; i++) {
+    if (i < coords.length - 1) {
+      // Bearing from this point to next
+      const b = calcBearing(coords[i][0], coords[i][1], coords[i+1][0], coords[i+1][1]);
+      bearings.push(`${Math.round(b)},${RANGE}`);
+    } else {
+      // Last point: use same bearing as previous
+      const b = calcBearing(coords[i-1][0], coords[i-1][1], coords[i][0], coords[i][1]);
+      bearings.push(`${Math.round(b)},${RANGE}`);
+    }
+  }
+
+  return bearings.join(';');
+}
+
+/**
+ * Haversine distance in meters between two [lng,lat] points
+ */
+function haversineDistance(c1, c2) {
+  const toRad = d => d * Math.PI / 180;
+  const R = 6371000;
+  const dLat = toRad(c2[1] - c1[1]);
+  const dLng = toRad(c2[0] - c1[0]);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(c1[1])) * Math.cos(toRad(c2[1])) * Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+/**
+ * cleanGpsTrace — Remove GPS outliers that jump too far from the trajectory.
+ * If a point is >500m from both its predecessor and successor, it's an outlier.
+ *
+ * @param {Array<[number,number]>} coords
+ * @returns {Array<[number,number]>}
+ */
+function cleanGpsTrace(coords) {
+  if (coords.length <= 3) return coords;
+
+  const cleaned = [coords[0]]; // always keep first
+
+  for (let i = 1; i < coords.length - 1; i++) {
+    const dPrev = haversineDistance(coords[i-1], coords[i]);
+    const dNext = haversineDistance(coords[i], coords[i+1]);
+    // If point jumps >500m from both neighbors → likely GPS glitch
+    if (dPrev > 500 && dNext > 500) continue;
+    cleaned.push(coords[i]);
+  }
+
+  cleaned.push(coords[coords.length - 1]); // always keep last
+  return cleaned;
+}
+
+// ── Road-Following Route ─────────────────────────────────────────────────────
+
+/**
+ * routeChunk — Route through waypoints via OSRM /route API WITH bearings.
+ * Bearings prevent zigzagging between parallel roads.
+ *
+ * @param {Array<[number,number]>} coords  [lng,lat][]
+ * @returns {Promise<Array<[number,number]>|null>}
  */
 async function routeChunk(coords) {
   if (coords.length < 2) return null;
 
-  // OSRM /route has a limit of ~100 waypoints
+  // OSRM /route: max ~100 waypoints
   const limited = coords.length > 100 ? sample(coords, 100) : coords;
 
+  const bearingsStr = computeBearings(limited);
+
   const url = `${OSRM_BASE}/route/v1/driving/${coordStr(limited)}`
-    + `?overview=full&geometries=geojson&continue_straight=false`;
+    + `?overview=full&geometries=geojson&continue_straight=true`
+    + `&bearings=${bearingsStr}`;
 
   try {
     const data = await fetchWithTimeout(url);
     if (data.code !== 'Ok' || !data.routes?.length) {
       console.warn('[OSRM route chunk] failed:', data.code, data.message);
-      return null;
+      // Fallback: try without bearings (some edge cases)
+      return routeChunkNoBearings(limited);
     }
     return data.routes[0].geometry.coordinates;
   } catch (err) {
     console.warn('[OSRM route chunk]', err.message);
+    return routeChunkNoBearings(limited);
+  }
+}
+
+/** Fallback route without bearings */
+async function routeChunkNoBearings(coords) {
+  const url = `${OSRM_BASE}/route/v1/driving/${coordStr(coords)}`
+    + `?overview=full&geometries=geojson&continue_straight=true`;
+  try {
+    const data = await fetchWithTimeout(url);
+    if (data.code !== 'Ok' || !data.routes?.length) return null;
+    return data.routes[0].geometry.coordinates;
+  } catch {
     return null;
   }
 }
@@ -80,55 +187,55 @@ async function routeChunk(coords) {
 /**
  * matchTripToRoads — Snaps a full GPS trace to the road network.
  *
- * Uses OSRM /route API (NOT /match) because Porto taxi GPS is too sparse for /match.
- * Strategy:
- *   - ≤ 100 points: single /route call with all points as waypoints
- *   - 100-500 points: sample to 80 waypoints, single call
- *   - > 500 points: chunk into overlapping segments of 60 waypoints each
+ * Pipeline:
+ *   1. Clean GPS trace (remove outliers >500m from neighbors)
+ *   2. Sample to manageable waypoint count
+ *   3. Route via OSRM with bearing constraints
  *
  * @param {Array<[number,number]>} rawCoords  [lng,lat][]
- * @returns {Promise<Array<[number,number]>|null>}  road-following coordinates
+ * @returns {Promise<Array<[number,number]>|null>}
  */
 export async function matchTripToRoads(rawCoords) {
   if (!rawCoords || rawCoords.length < 2) return null;
 
-  // Short trip — direct route with all points
-  if (rawCoords.length <= 100) {
-    return routeChunk(rawCoords);
+  // Step 1: Clean outliers
+  const cleaned = cleanGpsTrace(rawCoords);
+  console.log(`[matchTripToRoads] ${rawCoords.length} raw → ${cleaned.length} cleaned`);
+
+  // Short trip — direct
+  if (cleaned.length <= 100) {
+    return routeChunk(cleaned);
   }
 
-  // Medium trip — sample to 80 waypoints
-  if (rawCoords.length <= 500) {
-    return routeChunk(sample(rawCoords, 80));
+  // Medium trip — sample to 80
+  if (cleaned.length <= 500) {
+    return routeChunk(sample(cleaned, 80));
   }
 
-  // Long trip — chunk into overlapping segments
-  const WAYPOINTS_PER_CHUNK = 60;
-  const OVERLAP = 5; // 5-point overlap for continuity
-  const sampled = sample(rawCoords, 200); // sample to manageable size first
+  // Long trip — chunk
+  const WAYPOINTS = 60;
+  const OVERLAP   = 5;
+  const sampled   = sample(cleaned, 200);
 
   const chunks = [];
-  for (let i = 0; i < sampled.length; i += (WAYPOINTS_PER_CHUNK - OVERLAP)) {
-    const end = Math.min(i + WAYPOINTS_PER_CHUNK, sampled.length);
+  for (let i = 0; i < sampled.length; i += (WAYPOINTS - OVERLAP)) {
+    const end = Math.min(i + WAYPOINTS, sampled.length);
     chunks.push(sampled.slice(i, end));
     if (end >= sampled.length) break;
   }
 
-  // Sequential to respect rate limits
   const results = [];
   for (const chunk of chunks) {
     results.push(await routeChunk(chunk));
-    await new Promise(r => setTimeout(r, 300)); // respect rate limit
+    await new Promise(r => setTimeout(r, 300));
   }
 
-  // Merge route segments
   const merged = [];
   for (let i = 0; i < results.length; i++) {
     if (!results[i]) continue;
     if (i === 0) {
       merged.push(...results[i]);
     } else {
-      // Skip some initial points to avoid duplicate geometry at overlap
       const skip = Math.min(10, Math.floor(results[i].length * 0.1));
       merged.push(...results[i].slice(skip));
     }
@@ -139,9 +246,8 @@ export async function matchTripToRoads(rawCoords) {
 // ── Planned Route ────────────────────────────────────────────────────────────
 
 /**
- * getPlannedRoute — Computes the optimal driving route via intermediate waypoints.
- * Uses up to 12 evenly-spaced GPS points as route hints so the planned path
- * follows roads through the same general corridor.
+ * getPlannedRoute — Optimal driving route via intermediate waypoints.
+ * NO bearings here — planned route = "what the optimal path would be"
  *
  * @param {Array<[number,number]>} rawCoords  [lng,lat][]
  * @returns {Promise<Array<[number,number]>|null>}
@@ -149,7 +255,6 @@ export async function matchTripToRoads(rawCoords) {
 export async function getPlannedRoute(rawCoords) {
   if (!rawCoords || rawCoords.length < 2) return null;
 
-  // Use up to 12 waypoints: start, ~10 intermediates, end
   const waypoints = sample(rawCoords, Math.min(rawCoords.length, 12));
 
   const url = `${OSRM_BASE}/route/v1/driving/${coordStr(waypoints)}`
@@ -167,9 +272,6 @@ export async function getPlannedRoute(rawCoords) {
 
 // ── Nearest Road Snap ─────────────────────────────────────────────────────────
 
-/**
- * snapPointToRoad — Snaps a single [lng, lat] to the nearest road.
- */
 export async function snapPointToRoad(lng, lat) {
   const url = `${OSRM_BASE}/nearest/v1/driving/${lng.toFixed(6)},${lat.toFixed(6)}?number=1`;
   try {
@@ -181,9 +283,6 @@ export async function snapPointToRoad(lng, lat) {
   }
 }
 
-/**
- * snapPointsBatch — Snap array of [lng,lat] coords to roads in batches.
- */
 export async function snapPointsBatch(coords, concurrency = 6) {
   const results = new Array(coords.length).fill(null);
   for (let i = 0; i < coords.length; i += concurrency) {
