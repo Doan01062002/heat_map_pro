@@ -391,48 +391,122 @@ export async function matchTripToRoads(rawCoords) {
 
   if (waypoints.length < 2) return null;
 
-  // Step 3: Pairwise segment routing
-  // Route each consecutive PAIR of waypoints separately:
-  //   A→B, B→C, C→D, ...
-  // Each pair = simple 2-point route → NO loops possible!
+  // Step 3: Snap each H3 waypoint to nearest ROAD NODE
+  // This is critical: H3 cell centers may be off-road (sidewalk, park, building).
+  // OSRM /nearest snaps them to the actual road network → routing becomes accurate.
+  console.log(`[matchTripToRoads] Snapping ${waypoints.length} waypoints to road network...`);
+  const SNAP_BATCH = 5; // snap 5 in parallel
+  const snapped = [];
+  for (let i = 0; i < waypoints.length; i += SNAP_BATCH) {
+    const batch = waypoints.slice(i, i + SNAP_BATCH).map(snapToNearestRoad);
+    const results = await Promise.all(batch);
+    snapped.push(...results);
+    if (i + SNAP_BATCH < waypoints.length) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+  }
+  console.log(`[matchTripToRoads] ${snapped.length} waypoints snapped to roads`);
+
+  // Step 4: Remove snapped duplicates (two H3 cells may snap to same road node)
+  const dedupedSnapped = [snapped[0]];
+  for (let i = 1; i < snapped.length; i++) {
+    const prev = dedupedSnapped[dedupedSnapped.length - 1];
+    if (haversineDistance(prev, snapped[i]) > 20) { // > 20m apart
+      dedupedSnapped.push(snapped[i]);
+    }
+  }
+  console.log(`[matchTripToRoads] After snap dedup: ${dedupedSnapped.length} waypoints`);
+
+  if (dedupedSnapped.length < 2) return null;
+
+  // Step 5: Pairwise routing WITH bearing constraints
+  // Each A→B pair: bearing computed from A to B constrains OSRM
+  // to roads matching travel direction → rejects parallel/opposite roads.
   const segments = [];
-  const BATCH_SIZE = 4;  // process 4 pairs in parallel to speed up
-  
-  for (let i = 0; i < waypoints.length - 1; i += BATCH_SIZE) {
+  const ROUTE_BATCH = 3; // 3 pairs in parallel (bearing calls are slightly heavier)
+
+  for (let i = 0; i < dedupedSnapped.length - 1; i += ROUTE_BATCH) {
     const batch = [];
-    for (let j = i; j < Math.min(i + BATCH_SIZE, waypoints.length - 1); j++) {
-      batch.push(routePair(waypoints[j], waypoints[j + 1]));
+    for (let j = i; j < Math.min(i + ROUTE_BATCH, dedupedSnapped.length - 1); j++) {
+      batch.push(routePairWithBearing(dedupedSnapped[j], dedupedSnapped[j + 1]));
     }
     const results = await Promise.all(batch);
     segments.push(...results);
-
-    // Small delay between batches to respect rate limits
-    if (i + BATCH_SIZE < waypoints.length - 1) {
+    if (i + ROUTE_BATCH < dedupedSnapped.length - 1) {
       await new Promise(r => setTimeout(r, 150));
     }
   }
 
-  // Step 4: Stitch segments together (skip duplicate junction points)
+  // Step 6: Stitch segments (skip duplicate junction point at each join)
   const merged = [];
   for (let i = 0; i < segments.length; i++) {
     if (!segments[i] || segments[i].length === 0) continue;
     if (merged.length === 0) {
       merged.push(...segments[i]);
     } else {
-      // Skip first point of this segment (it's the same as last point of previous)
       merged.push(...segments[i].slice(1));
     }
   }
 
-  console.log(`[matchTripToRoads] ${segments.length} segments → ${merged.length} total route coords`);
+  console.log(`[matchTripToRoads] ${segments.length} segments → ${merged.length} total coords`);
   return merged.length >= 2 ? merged : null;
 }
 
 /**
- * routePair — Route between exactly 2 points via OSRM.
- * Simple A→B route, no loops possible.
+ * snapToNearestRoad — Snap a coordinate to the nearest road node
+ * via OSRM /nearest API. Returns the snapped road coordinate,
+ * or the original if the API fails.
+ *
+ * This is the KEY fix: H3 cell centers may be in the middle of a block.
+ * Snapping them to the road network ensures OSRM routes FROM a road node,
+ * not from an arbitrary point that triggers long detours to reach.
+ *
+ * @param {[number,number]} coord  [lng,lat]
+ * @returns {Promise<[number,number]>}  snapped [lng,lat] on nearest road
  */
-async function routePair(coordA, coordB) {
+async function snapToNearestRoad(coord) {
+  const url = `${OSRM_BASE}/nearest/v1/driving/${coord[0].toFixed(6)},${coord[1].toFixed(6)}?number=1`;
+  try {
+    const data = await fetchWithTimeout(url);
+    if (data.code !== 'Ok' || !data.waypoints?.length) return coord;
+    return data.waypoints[0].location; // [lng, lat] already on road
+  } catch {
+    return coord; // fall back to original
+  }
+}
+
+/**
+ * routePairWithBearing — Route between 2 road-snapped points with
+ * bearing constraint. The bearing from A→B is computed and passed to
+ * OSRM so it only uses road segments matching the travel direction.
+ *
+ * @param {[number,number]} coordA  [lng,lat] — already road-snapped
+ * @param {[number,number]} coordB  [lng,lat] — already road-snapped
+ * @returns {Promise<Array<[number,number]>|null>}
+ */
+async function routePairWithBearing(coordA, coordB) {
+  const bearing = Math.round(calcBearing(coordA[0], coordA[1], coordB[0], coordB[1]));
+  // Use ±35° tolerance: tight enough to reject parallel roads,
+  // loose enough to handle curved roads and slight GPS offsets
+  const bearStr = `${bearing},35;${bearing},35`;
+
+  const url = `${OSRM_BASE}/route/v1/driving/${coordStr([coordA, coordB])}`
+    + `?overview=full&geometries=geojson&continue_straight=true`
+    + `&bearings=${bearStr}`;
+  try {
+    const data = await fetchWithTimeout(url);
+    if (data.code !== 'Ok' || !data.routes?.length) {
+      // Fallback: route without bearing constraint
+      return routePairNoBearing(coordA, coordB);
+    }
+    return data.routes[0].geometry.coordinates;
+  } catch {
+    return routePairNoBearing(coordA, coordB);
+  }
+}
+
+/** Fallback: 2-point route without bearing */
+async function routePairNoBearing(coordA, coordB) {
   const url = `${OSRM_BASE}/route/v1/driving/${coordStr([coordA, coordB])}`
     + `?overview=full&geometries=geojson&continue_straight=true`;
   try {
