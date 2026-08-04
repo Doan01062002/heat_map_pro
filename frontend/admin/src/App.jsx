@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import MapContainer from './components/MapContainer';
 import FilterPanel from './components/FilterPanel';
 import StatsOverlay from './components/StatsOverlay';
@@ -14,7 +14,7 @@ import { useHeatmapStream } from './hooks/useHeatmapStream';
  * 4. StatsOverlay shows real-time KPIs
  */
 export default function App() {
-  const [mode, setMode] = useState('live'); // 'live' | 'history'
+  const [mode, setMode] = useState('history'); // Start in history mode to show Porto data
   const [dateRange, setDateRange] = useState({ from: null, to: null });
 
   const wsUrl = import.meta.env.VITE_ADMIN_WS_URL || 'ws://localhost:8080/ws/admin';
@@ -44,6 +44,13 @@ export default function App() {
       setHistoryLoading(false);
     }
   };
+
+  // Auto-load Porto taxi data on mount (July 2013 timerange)
+  useEffect(() => {
+    const portoFrom = 1372636800000; // 2013-07-01T00:00:00Z
+    const portoTo = 1377907200000;   // 2013-08-31T00:00:00Z
+    handleFetchHistory(portoFrom, portoTo);
+  }, []);
 
   const activeCells = mode === 'live' ? cells : historyCells;
 

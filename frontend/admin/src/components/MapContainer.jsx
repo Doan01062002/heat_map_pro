@@ -7,7 +7,7 @@ import HeatmapLayer from './HeatmapLayer';
  */
 
 const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
-const HCMC_CENTER = [106.7009, 10.7769];
+const PORTO_CENTER = [-8.6291, 41.1579];
 
 export default function MapContainer({ cells = [] }) {
   const containerRef = useRef(null);
@@ -33,7 +33,7 @@ export default function MapContainer({ cells = [] }) {
       map = new maplibregl.Map({
         container: containerRef.current,
         style: MAP_STYLE,
-        center: HCMC_CENTER,
+        center: PORTO_CENTER,
         zoom: 12,
         pitch: 45,
         bearing: -15,
@@ -80,7 +80,7 @@ export default function MapContainer({ cells = [] }) {
           🗺️ Deviation Heatmap
         </div>
         <div style={{ fontSize: '11px', color: '#888', marginTop: '2px' }}>
-          Ho Chi Minh City — Real-time
+          Porto, Portugal — Taxi Trajectory Analysis
         </div>
       </div>
     </div>
