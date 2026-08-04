@@ -3,6 +3,117 @@ import { snapPointsBatch } from '../utils/osrmRouting';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 
+// ── Shared popup helper ───────────────────────────────────────────────────────
+/**
+ * showRoadStatsPopup — queries /api/road-stats and renders a Vietnamese popup.
+ * @param {object} map         MapLibre map instance
+ * @param {object} popupLngLat {lng, lat} where to anchor the popup (click point)
+ * @param {number} queryLat    lat for DB query (use orig GPS lat for dots)
+ * @param {number} queryLng    lng for DB query
+ * @param {number} [hintDev]   optional deviation hint (shown before query returns)
+ */
+async function showRoadStatsPopup(map, popupLngLat, queryLat, queryLng, hintDev) {
+  const zoom   = map.getZoom();
+  const radius = zoom < 10 ? 300 : zoom < 12 ? 200 : zoom < 14 ? 150 : 100;
+
+  const loading = new window.maplibregl.Popup({ offset: 12, maxWidth: '270px' })
+    .setLngLat(popupLngLat)
+    .setHTML(`
+      <div style="font-family:Inter,sans-serif;color:#333;font-size:13px;line-height:1.6">
+        <div style="font-weight:700;margin-bottom:4px">📍 Đang tải thống kê…</div>
+        ${hintDev != null ? `<div style="color:#e65100;font-size:11px">Độ lệch: ${hintDev >= 1000 ? (hintDev/1000).toFixed(1)+' km' : Math.round(hintDev)+' m'}</div>` : ''}
+        <div style="color:#aaa;font-size:11px">${queryLat.toFixed(5)}, ${queryLng.toFixed(5)}</div>
+      </div>
+    `)
+    .addTo(map);
+
+  try {
+    const res = await fetch(
+      `${API_URL}/api/road-stats?lat=${queryLat}&lng=${queryLng}&radius=${radius}`
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const d = await res.json();
+    loading.remove();
+
+    if (!d.unique_trips) {
+      new window.maplibregl.Popup({ offset: 12, maxWidth: '240px' })
+        .setLngLat(popupLngLat)
+        .setHTML(`
+          <div style="font-family:Inter,sans-serif;font-size:13px;color:#333">
+            <div style="font-weight:700;margin-bottom:4px">📍 Khu vực này</div>
+            <div style="color:#888">Không có dữ liệu trong bán kính ${radius}m.</div>
+            <div style="color:#bbb;font-size:10px;margin-top:4px">${queryLat.toFixed(5)}, ${queryLng.toFixed(5)}</div>
+          </div>
+        `)
+        .addTo(map);
+      return;
+    }
+
+    const fmtDev = v => v >= 1000 ? `${(v/1000).toFixed(1)} km` : `${Math.round(v)} m`;
+    const ratio  = d.avoid_ratio.toFixed(1);
+    const iColor = d.avoid_ratio < 20 ? '#00b894'
+                 : d.avoid_ratio < 50 ? '#fdcb6e'
+                 : d.avoid_ratio < 75 ? '#e17055' : '#d63031';
+    const barW   = Math.min(100, Math.round(d.avoid_ratio));
+
+    new window.maplibregl.Popup({ offset: 12, maxWidth: '285px', closeButton: true })
+      .setLngLat(popupLngLat)
+      .setHTML(`
+        <div style="font-family:Inter,system-ui,sans-serif;font-size:12.5px;color:#111;line-height:1.85">
+          <div style="font-weight:800;font-size:14px;margin-bottom:10px;color:#1a237e">🛣️ Thống kê đoạn đường</div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;margin-bottom:10px">
+            <div>
+              <div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">Tổng lượt xe</div>
+              <div style="font-weight:700;font-size:18px;color:#1565c0">${d.unique_trips}</div>
+            </div>
+            <div>
+              <div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">Tài xế</div>
+              <div style="font-weight:700;font-size:18px;color:#6a1b9a">${d.unique_drivers}</div>
+            </div>
+            <div>
+              <div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">Đi đúng đường</div>
+              <div style="font-weight:700;font-size:18px;color:#2e7d32">${d.normal_trips}</div>
+            </div>
+            <div>
+              <div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">Né tránh</div>
+              <div style="font-weight:700;font-size:18px;color:#c62828">${d.high_dev_trips}</div>
+            </div>
+          </div>
+
+          <div style="margin-bottom:9px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+              <span style="color:#555;font-size:11px;font-weight:600">Tỷ lệ né tránh</span>
+              <b style="color:${iColor};font-size:13px">${ratio}%</b>
+            </div>
+            <div style="background:#e8e8e8;border-radius:6px;height:9px;overflow:hidden">
+              <div style="width:${barW}%;height:100%;background:linear-gradient(90deg,${iColor}bb,${iColor});border-radius:6px;transition:width .4s"></div>
+            </div>
+          </div>
+
+          <div style="border-top:1px solid #eee;padding-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px">
+            <div>
+              <div style="color:#888;font-size:10px">Độ lệch trung bình</div>
+              <div style="font-weight:700;color:#e65100">${fmtDev(d.avg_deviation)}</div>
+            </div>
+            <div>
+              <div style="color:#888;font-size:10px">Độ lệch tối đa</div>
+              <div style="font-weight:700;color:#b71c1c">${fmtDev(d.max_deviation)}</div>
+            </div>
+          </div>
+
+          <div style="margin-top:6px;color:#bbb;font-size:10px">
+            📌 ${queryLat.toFixed(5)}, ${queryLng.toFixed(5)} · bán kính ${radius}m
+          </div>
+        </div>
+      `)
+      .addTo(map);
+  } catch (err) {
+    loading.remove();
+    console.warn('[road-stats]', err.message);
+  }
+}
+
 /**
  * HeatmapLayer:
  * 1. Smooth heatmap gradient (always visible, all zooms)
@@ -135,13 +246,17 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
           }
         }
 
-        // Build snapped GeoJSON from cache
+        // Build snapped GeoJSON from cache — store original coords for click query
         const snappedFeatures = toSnap
           .filter(p => snapCache.current.has(p.key))
           .map(p => ({
             type: 'Feature',
             geometry: { type: 'Point', coordinates: snapCache.current.get(p.key) },
-            properties: { deviation: p.deviation },
+            properties: {
+              deviation: p.deviation,
+              orig_lng:  p.lng,   // original GPS lng (used for road-stats query)
+              orig_lat:  p.lat,   // original GPS lat
+            },
           }));
 
         const src = map.getSource('hm-snapped');
@@ -151,86 +266,40 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
       map.on('moveend', onMoveEnd);
       map.on('zoomend', onMoveEnd);
 
-      // ── Map click → Vietnamese road stats popup ──
+      // ── Click on snapped dot → show road stats popup (uses original GPS coords) ──
+      map.on('click', 'hm-snapped-dots', async (e) => {
+        e.originalEvent.stopPropagation(); // prevent general map click from also firing
+        if (!e.features?.length) return;
+
+        const f   = e.features[0];
+        const dev = f.properties.deviation;
+        // Use original GPS coordinates for DB query (they match deviation_events table)
+        const lat = f.properties.orig_lat ?? e.lngLat.lat;
+        const lng = f.properties.orig_lng ?? e.lngLat.lng;
+
+        await showRoadStatsPopup(map, e.lngLat, lat, lng, dev);
+      });
+
+      // ── General map click → Vietnamese road stats (areas without dots) ──
       const onMapClick = async (e) => {
-        // Skip if clicking on trip route layers
+        // Skip trip route layers
         for (const layer of ['trip-actual', 'trip-planned']) {
           if (map.getLayer(layer) && map.queryRenderedFeatures(e.point, { layers: [layer] }).length > 0) return;
         }
+        // Skip if clicking directly on a snapped dot (handled by dot-specific handler)
+        if (map.getLayer('hm-snapped-dots') &&
+            map.queryRenderedFeatures(e.point, { layers: ['hm-snapped-dots'] }).length > 0) return;
 
         const { lng, lat } = e.lngLat;
-        const zoom   = map.getZoom();
-        const radius = zoom < 10 ? 300 : zoom < 12 ? 200 : zoom < 14 ? 150 : 100;
-
-        const loadingPopup = new window.maplibregl.Popup({ offset: 12, maxWidth: '260px' })
-          .setLngLat(e.lngLat)
-          .setHTML(`<div style="font-family:Inter,sans-serif;color:#333;font-size:13px"><b>📍 Đang tải…</b><br><small style="color:#aaa">${lat.toFixed(5)}, ${lng.toFixed(5)}</small></div>`)
-          .addTo(map);
-
-        try {
-          const res = await fetch(`${API_URL}/api/road-stats?lat=${lat}&lng=${lng}&radius=${radius}`);
-          const d   = await res.json();
-          loadingPopup.remove();
-
-          if (d.unique_trips === 0) {
-            new window.maplibregl.Popup({ offset: 12, maxWidth: '230px' })
-              .setLngLat(e.lngLat)
-              .setHTML(`<div style="font-family:Inter,sans-serif;font-size:13px;color:#333"><b>📍 Khu vực này</b><br><span style="color:#888">Không có dữ liệu trong bán kính ${radius}m</span><br><small style="color:#bbb">${lat.toFixed(5)}, ${lng.toFixed(5)}</small></div>`)
-              .addTo(map);
-            return;
-          }
-
-          const fmtDev  = v => v >= 1000 ? `${(v/1000).toFixed(1)} km` : `${Math.round(v)} m`;
-          const ratio   = d.avoid_ratio.toFixed(1);
-          const iColor  = d.avoid_ratio < 20 ? '#00b894' : d.avoid_ratio < 50 ? '#fdcb6e' : d.avoid_ratio < 75 ? '#e17055' : '#d63031';
-          const barW    = Math.min(100, Math.round(d.avoid_ratio));
-
-          new window.maplibregl.Popup({ offset: 12, maxWidth: '280px', closeButton: true })
-            .setLngLat(e.lngLat)
-            .setHTML(`
-              <div style="font-family:Inter,system-ui,sans-serif;font-size:12.5px;color:#111;line-height:1.85">
-                <div style="font-weight:800;font-size:14px;margin-bottom:10px;color:#1a237e">🛣️ Thống kê đoạn đường</div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;margin-bottom:10px">
-                  <div><div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">Tổng lượt xe</div>
-                    <div style="font-weight:700;font-size:17px;color:#1565c0">${d.unique_trips}</div></div>
-                  <div><div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">Tài xế</div>
-                    <div style="font-weight:700;font-size:17px;color:#6a1b9a">${d.unique_drivers}</div></div>
-                  <div><div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">Đi đúng đường</div>
-                    <div style="font-weight:700;font-size:17px;color:#2e7d32">${d.normal_trips}</div></div>
-                  <div><div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">Né tránh</div>
-                    <div style="font-weight:700;font-size:17px;color:#c62828">${d.high_dev_trips}</div></div>
-                </div>
-                <div style="margin-bottom:9px">
-                  <div style="display:flex;justify-content:space-between;margin-bottom:3px">
-                    <span style="color:#555;font-size:11px">Tỷ lệ né tránh</span>
-                    <b style="color:${iColor}">${ratio}%</b>
-                  </div>
-                  <div style="background:#eee;border-radius:4px;height:8px;overflow:hidden">
-                    <div style="width:${barW}%;height:100%;background:${iColor};border-radius:4px"></div>
-                  </div>
-                </div>
-                <div style="border-top:1px solid #eee;padding-top:7px;display:grid;grid-template-columns:1fr 1fr;gap:4px">
-                  <div><div style="color:#888;font-size:10px">Độ lệch TB</div>
-                    <div style="font-weight:600;color:#e65100">${fmtDev(d.avg_deviation)}</div></div>
-                  <div><div style="color:#888;font-size:10px">Độ lệch max</div>
-                    <div style="font-weight:600;color:#b71c1c">${fmtDev(d.max_deviation)}</div></div>
-                </div>
-                <div style="margin-top:5px;color:#bbb;font-size:10px">📌 ${lat.toFixed(5)}, ${lng.toFixed(5)} · bán kính ${radius}m</div>
-              </div>
-            `)
-            .addTo(map);
-        } catch (err) {
-          loadingPopup.remove();
-          console.warn('[road-stats]', err);
-        }
+        await showRoadStatsPopup(map, e.lngLat, lat, lng);
       };
 
       clickHandler.current = onMapClick;
       map.on('click', onMapClick);
 
-      map.on('mouseenter', 'hm-hover',       () => { map.getCanvas().style.cursor = 'crosshair'; });
-      map.on('mouseleave', 'hm-hover',       () => { map.getCanvas().style.cursor = ''; });
-      map.on('mouseenter', 'hm-snapped-dots', () => { map.getCanvas().style.cursor = 'crosshair'; });
+      map.on('mouseenter', 'hm-hover',        () => { map.getCanvas().style.cursor = 'crosshair'; });
+      map.on('mouseleave', 'hm-hover',        () => { map.getCanvas().style.cursor = ''; });
+      map.on('mouseenter', 'hm-snapped-dots', () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', 'hm-snapped-dots', () => { map.getCanvas().style.cursor = ''; });
 
       initialized.current = true;
