@@ -300,52 +300,83 @@ async function routeChunkNoBearings(coords) {
 export async function matchTripToRoads(rawCoords) {
   if (!rawCoords || rawCoords.length < 2) return null;
 
-  // Step 1: Clean outliers
+  // Step 1: Clean GPS trace (dedup, outliers, U-turns, simplify)
   const cleaned = cleanGpsTrace(rawCoords);
-  console.log(`[matchTripToRoads] ${rawCoords.length} raw → ${cleaned.length} cleaned`);
 
-  // Short trip — direct
-  if (cleaned.length <= 100) {
-    return routeChunk(cleaned);
+  // Step 2: Aggressively select KEY WAYPOINTS only (major direction changes)
+  // Use Douglas-Peucker with large tolerance (150m) to keep only significant turns
+  const keyPoints = douglasPeucker(cleaned, 150);
+
+  // Ensure we have a reasonable number of waypoints (5-25)
+  let waypoints;
+  if (keyPoints.length > 25) {
+    waypoints = sample(keyPoints, 25);
+  } else if (keyPoints.length < 3 && cleaned.length >= 3) {
+    // Too few key points — use sampled cleaned points
+    waypoints = sample(cleaned, Math.min(cleaned.length, 10));
+  } else {
+    waypoints = keyPoints;
   }
 
-  // Medium trip — sample to 80
-  if (cleaned.length <= 500) {
-    return routeChunk(sample(cleaned, 80));
-  }
+  console.log(`[matchTripToRoads] ${rawCoords.length} raw → ${cleaned.length} cleaned → ${keyPoints.length} key → ${waypoints.length} waypoints`);
 
-  // Long trip — chunk
-  const WAYPOINTS = 60;
-  const OVERLAP   = 5;
-  const sampled   = sample(cleaned, 200);
+  if (waypoints.length < 2) return null;
 
-  const chunks = [];
-  for (let i = 0; i < sampled.length; i += (WAYPOINTS - OVERLAP)) {
-    const end = Math.min(i + WAYPOINTS, sampled.length);
-    chunks.push(sampled.slice(i, end));
-    if (end >= sampled.length) break;
-  }
+  // Step 3: Pairwise segment routing
+  // Route each consecutive PAIR of waypoints separately:
+  //   A→B, B→C, C→D, ...
+  // Each pair = simple 2-point route → no loops possible!
+  const segments = [];
+  const BATCH_SIZE = 4;  // process 4 pairs in parallel to speed up
+  
+  for (let i = 0; i < waypoints.length - 1; i += BATCH_SIZE) {
+    const batch = [];
+    for (let j = i; j < Math.min(i + BATCH_SIZE, waypoints.length - 1); j++) {
+      batch.push(routePair(waypoints[j], waypoints[j + 1]));
+    }
+    const results = await Promise.all(batch);
+    segments.push(...results);
 
-  const results = [];
-  for (const chunk of chunks) {
-    results.push(await routeChunk(chunk));
-    await new Promise(r => setTimeout(r, 300));
-  }
-
-  const merged = [];
-  for (let i = 0; i < results.length; i++) {
-    if (!results[i]) continue;
-    if (i === 0) {
-      merged.push(...results[i]);
-    } else {
-      const skip = Math.min(10, Math.floor(results[i].length * 0.1));
-      merged.push(...results[i].slice(skip));
+    // Small delay between batches to respect rate limits
+    if (i + BATCH_SIZE < waypoints.length - 1) {
+      await new Promise(r => setTimeout(r, 150));
     }
   }
+
+  // Step 4: Stitch segments together (skip duplicate junction points)
+  const merged = [];
+  for (let i = 0; i < segments.length; i++) {
+    if (!segments[i] || segments[i].length === 0) continue;
+    if (merged.length === 0) {
+      merged.push(...segments[i]);
+    } else {
+      // Skip first point of this segment (it's the same as last point of previous)
+      merged.push(...segments[i].slice(1));
+    }
+  }
+
+  console.log(`[matchTripToRoads] ${segments.length} segments → ${merged.length} total route coords`);
   return merged.length >= 2 ? merged : null;
 }
 
+/**
+ * routePair — Route between exactly 2 points via OSRM.
+ * Simple A→B route, no loops possible.
+ */
+async function routePair(coordA, coordB) {
+  const url = `${OSRM_BASE}/route/v1/driving/${coordStr([coordA, coordB])}`
+    + `?overview=full&geometries=geojson&continue_straight=true`;
+  try {
+    const data = await fetchWithTimeout(url);
+    if (data.code !== 'Ok' || !data.routes?.length) return null;
+    return data.routes[0].geometry.coordinates;
+  } catch {
+    return null;
+  }
+}
+
 // ── Planned Route ────────────────────────────────────────────────────────────
+
 
 /**
  * getPlannedRoute — Optimal driving route via intermediate waypoints.
