@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
 import { snapPointsBatch } from '../utils/osrmRouting';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
@@ -116,21 +116,144 @@ async function showRoadStatsPopup(map, popupLngLat, queryLat, queryLng, hintDev)
   }
 }
 
+// ── Lixel Binning: Build road-segment GeoJSON from trajectory + deviation data ──
+/**
+ * buildRoadSegmentAggregatedGeoJSON — Lixel Binning implementation.
+ *
+ * Algorithm:
+ *   1. Collect all GPS coords from trajectories (LineString coordinates).
+ *   2. For each consecutive pair of coordinates (A → B), create a "segment key"
+ *      by snapping both endpoints to an H3 cell at res 11 (~25m) and joining them.
+ *      This groups nearby GPS noise into the same segment.
+ *   3. Count how many deviation events fall near each segment (using a bounding box
+ *      around the midpoint of each segment pair).
+ *   4. Return GeoJSON FeatureCollection of LineString features with `intensity`.
+ *
+ * Complexity: O(N * M) where N = trajectory segments, M = deviation points.
+ * For large datasets, this is fast enough at UI level (<500ms for 5000 points).
+ *
+ * @param {Array} trajectories - Array of trip objects with `coords: [[lng,lat],...]`
+ * @param {Array} points       - Array of deviation events with {lat, lng, deviation}
+ * @returns {object} GeoJSON FeatureCollection
+ */
+function buildRoadSegmentAggregatedGeoJSON(trajectories, points) {
+  // ── Phase 1: Build spatial grid of deviation points O(M) ─────────────────
+  // Grid cell = 0.002° ≈ 200m — matches the proximity tolerance below.
+  const GRID = 0.002;
+  const ptGrid = new Map(); // gridKey → count
+
+  for (const pt of points) {
+    const gx = Math.round(pt.lng / GRID);
+    const gy = Math.round(pt.lat / GRID);
+    const gk = `${gx},${gy}`;
+    ptGrid.set(gk, (ptGrid.get(gk) || 0) + 1);
+  }
+
+  // ── Phase 2: Build segment map and look up grid O(N) ─────────────────────
+  const segMap = new Map();
+
+  for (const trip of trajectories) {
+    const coords = trip.coords;
+    if (!coords || coords.length < 2) continue;
+
+    for (let i = 0; i < coords.length - 1; i++) {
+      const a = coords[i];   // [lng, lat]
+      const b = coords[i + 1];
+
+      // Merge nearby segments: round to 4 decimal places (~11m)
+      const ak = `${a[0].toFixed(4)},${a[1].toFixed(4)}`;
+      const bk = `${b[0].toFixed(4)},${b[1].toFixed(4)}`;
+      const key = ak < bk ? `${ak}|${bk}` : `${bk}|${ak}`;
+
+      if (!segMap.has(key)) {
+        // Compute midpoint and look up in spatial grid (O(1))
+        const midLng = (a[0] + b[0]) / 2;
+        const midLat = (a[1] + b[1]) / 2;
+        const gx = Math.round(midLng / GRID);
+        const gy = Math.round(midLat / GRID);
+
+        // Check the cell and its 8 neighbours to avoid boundary misses
+        let count = 0;
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            count += ptGrid.get(`${gx + dx},${gy + dy}`) || 0;
+          }
+        }
+
+        segMap.set(key, { coords: [a, b], count });
+      }
+    }
+  }
+
+  // ── Fallback: if no trajectories, build from points directly ─────────────
+  if (segMap.size === 0 && points.length > 1) {
+    // Sample max 500 points to avoid O(M²) segments
+    const sampled = points.length > 500
+      ? points.filter((_, i) => i % Math.floor(points.length / 500) === 0)
+      : points;
+    for (let i = 0; i < sampled.length - 1; i++) {
+      const a = [sampled[i].lng, sampled[i].lat];
+      const b = [sampled[i + 1].lng, sampled[i + 1].lat];
+      const ak = `${a[0].toFixed(3)},${a[1].toFixed(3)}`;
+      const bk = `${b[0].toFixed(3)},${b[1].toFixed(3)}`;
+      const key = ak < bk ? `${ak}|${bk}` : `${bk}|${ak}`;
+      if (!segMap.has(key)) segMap.set(key, { coords: [a, b], count: 1 });
+      else segMap.get(key).count++;
+    }
+  }
+
+  // ── Phase 3: Build GeoJSON — only segments with events ───────────────────
+  const features = [];
+  for (const seg of segMap.values()) {
+    if (seg.count === 0) continue;
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: seg.coords },
+      properties: { intensity: seg.count },
+    });
+  }
+
+  return { type: 'FeatureCollection', features };
+}
+
 /**
  * HeatmapLayer:
- * 1. Smooth heatmap gradient (always visible, all zooms)
- * 2. At zoom ≥ 14: individual GPS dots SNAPPED to the nearest road
- *    via OSRM /nearest API — dots appear on road centerlines, not off-road
- * 3. Click anywhere on map → Vietnamese stats popup via /api/road-stats
- * 4. Selected trip: planned route (blue dashed) + actual GPS route (orange)
- *
- * NO trajectory line layers — only dots and heatmap.
+ * 1. Smooth heatmap gradient (toggleable)
+ * 2. Heat-Lines: aggregated road segments colored by deviation event density
+ * 3. At zoom ≥ 14: individual GPS dots SNAPPED to nearest road via OSRM
+ * 4. Click anywhere → Vietnamese stats popup via /api/road-stats
+ * 5. Selected trip: planned route (blue dashed) + actual GPS route (orange)
  */
-export default function HeatmapLayer({ map, points = [], selectedTrip = null }) {
+export default function HeatmapLayer({
+  map,
+  points = [],
+  selectedTrip = null,
+  trajectories = [],
+  showHeatmap = true,
+  showTrajectories = true,
+}) {
   const initialized   = useRef(false);
   const clickHandler  = useRef(null);
-  const snapCache     = useRef(new Map()); // key: "lng,lat" → snapped [lng,lat]
+  const snapCache     = useRef(new Map());
   const snapPending   = useRef(false);
+
+  // ── Toggle Heatmap visibility ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!map || !initialized.current) return;
+    if (map.getLayer('hm-heat')) {
+      map.setLayoutProperty('hm-heat', 'visibility', showHeatmap ? 'visible' : 'none');
+    }
+  }, [map, showHeatmap]);
+
+  // ── Toggle Heat-Lines / Road Overlay visibility ────────────────────────────
+  useEffect(() => {
+    if (!map || !initialized.current) return;
+    // Toggle snapped dots
+    if (map.getLayer('hm-snapped-dots')) {
+      map.setLayoutProperty('hm-snapped-dots', 'visibility', showTrajectories ? 'visible' : 'none');
+    }
+    // Road overlay layers are toggled separately in the road-overlay useEffect
+  }, [map, showTrajectories]);
 
   // ── Heatmap + dot layers + click handler ──────────────────────────────────
   useEffect(() => {
@@ -311,6 +434,174 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
     }
   }, [map, points]);
 
+  // ── Road Traffic Overlay: Extract road geometry from basemap tiles ────────
+  // Strategy: query rendered road features from Carto basemap vector tiles,
+  // extract their ACTUAL road-following geometry, compute intensity from
+  // deviation grid, build a NEW GeoJSON source with road-shaped LineStrings.
+  // Result: colored lines that follow real road curves (like Google Maps).
+
+  // Road layer IDs from Carto dark-matter basemap
+  const ROAD_LAYERS = [
+    'road_mot_fill_noramp', 'road_trunk_fill_noramp', 'road_pri_fill_noramp',
+    'road_sec_fill_noramp', 'road_minor_fill', 'road_service_fill',
+    'road_pri_fill_ramp', 'road_trunk_fill_ramp', 'road_mot_fill_ramp',
+  ];
+
+  // Build spatial grid from deviation points — O(M), memoized
+  const densityGrid = useMemo(() => {
+    const GRID = 0.0012; // ~133m cells — finer grid for road-level precision
+    const grid = new Map();
+    for (const pt of points) {
+      const gx = Math.round(pt.lng / GRID);
+      const gy = Math.round(pt.lat / GRID);
+      grid.set(`${gx},${gy}`, (grid.get(`${gx},${gy}`) || 0) + 1);
+    }
+    return { grid, GRID };
+  }, [points]);
+
+  // Extract road geometries + build overlay on viewport change
+  useEffect(() => {
+    if (!map || !initialized.current) return;
+    if (points.length === 0) return;
+
+    const { grid, GRID } = densityGrid;
+
+    // Ensure overlay source + layers exist
+    if (!map.getSource('hm-road-overlay')) {
+      map.addSource('hm-road-overlay', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+
+      // Casing layer (dark outline for contrast)
+      map.addLayer({
+        id: 'hm-road-case',
+        type: 'line',
+        source: 'hm-road-overlay',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': '#000',
+          'line-width': ['interpolate', ['linear'], ['get', 'intensity'],
+            1, 4, 5, 6, 15, 8, 40, 11],
+          'line-opacity': 0.25,
+        },
+      });
+
+      // Colored traffic line (Google Maps style)
+      map.addLayer({
+        id: 'hm-road-line',
+        type: 'line',
+        source: 'hm-road-overlay',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-color': ['interpolate', ['linear'], ['get', 'intensity'],
+            1,  '#4285F4',   // Blue (low)
+            4,  '#34A853',   // Green (medium)
+            10, '#FBBC05',   // Yellow (high)
+            20, '#EA4335',   // Red (very high)
+            50, '#B71C1C',   // Dark red (extreme)
+          ],
+          'line-width': ['interpolate', ['linear'], ['get', 'intensity'],
+            1, 2.5, 5, 3.5, 15, 5, 40, 7],
+          'line-opacity': 0.9,
+        },
+      });
+    }
+
+    // Function to extract road geometry and compute intensity
+    const updateRoadOverlay = () => {
+      if (!map.isStyleLoaded()) return;
+
+      // Query visible road features from basemap
+      const existingLayers = ROAD_LAYERS.filter(id => map.getLayer(id));
+      if (existingLayers.length === 0) return;
+
+      const rawFeatures = map.queryRenderedFeatures(undefined, {
+        layers: existingLayers,
+      });
+
+      // Deduplicate by geometry hash (Carto tiles have no stable IDs)
+      const seen = new Set();
+      const features = [];
+
+      for (const f of rawFeatures) {
+        const coords = f.geometry?.coordinates;
+        if (!coords || coords.length < 2) continue;
+
+        // Flatten MultiLineString
+        const lines = f.geometry.type === 'MultiLineString' ? coords : [coords];
+
+        for (const line of lines) {
+          if (line.length < 2) continue;
+
+          // Create a geometry hash from first+last points (fast dedup)
+          const hash = `${line[0][0].toFixed(5)},${line[0][1].toFixed(5)}|${line[line.length-1][0].toFixed(5)},${line[line.length-1][1].toFixed(5)}|${line.length}`;
+          if (seen.has(hash)) continue;
+          seen.add(hash);
+
+          // Sample points along the road and count nearby deviation events
+          let intensity = 0;
+          const step = Math.max(1, Math.floor(line.length / 6));
+          for (let i = 0; i < line.length; i += step) {
+            const [lng, lat] = line[i];
+            const gx = Math.round(lng / GRID);
+            const gy = Math.round(lat / GRID);
+            for (let dx = -1; dx <= 1; dx++) {
+              for (let dy = -1; dy <= 1; dy++) {
+                intensity += grid.get(`${gx + dx},${gy + dy}`) || 0;
+              }
+            }
+          }
+
+          // Only include roads with at least 1 nearby deviation event
+          if (intensity > 0) {
+            features.push({
+              type: 'Feature',
+              geometry: { type: 'LineString', coordinates: line },
+              properties: { intensity },
+            });
+          }
+        }
+      }
+
+      // Update GeoJSON source
+      const src = map.getSource('hm-road-overlay');
+      if (src) {
+        src.setData({ type: 'FeatureCollection', features });
+      }
+    };
+
+    // Debounce viewport updates to avoid jank during pan/zoom
+    let timer;
+    const debouncedUpdate = () => {
+      clearTimeout(timer);
+      timer = setTimeout(updateRoadOverlay, 200);
+    };
+
+    // Initial update + re-update on viewport change
+    updateRoadOverlay();
+    map.on('moveend', debouncedUpdate);
+
+    return () => {
+      clearTimeout(timer);
+      map.off('moveend', debouncedUpdate);
+    };
+  }, [map, points, densityGrid]);
+
+  // ── Toggle road-overlay visibility ────────────────────────────────────────
+  useEffect(() => {
+    if (!map || !initialized.current) return;
+    ['hm-road-case', 'hm-road-line'].forEach(id => {
+      if (map.getLayer(id)) {
+        map.setLayoutProperty(id, 'visibility', showTrajectories ? 'visible' : 'none');
+      }
+    });
+    // Hide old spider-web layers if they still exist
+    ['hm-seg-case', 'hm-seg-line'].forEach(id => {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', 'none');
+    });
+  }, [map, showTrajectories]);
+
   // ── Selected trip route overlay ───────────────────────────────────────────
   useEffect(() => {
     if (!map || !initialized.current) return;
@@ -486,11 +777,11 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
     return () => {
       if (!map || !initialized.current) return;
       if (clickHandler.current) map.off('click', clickHandler.current);
-      ['hm-heat','hm-hover','hm-snapped-dots',
+      ['hm-heat','hm-hover','hm-snapped-dots','hm-seg-case','hm-seg-line',
         'trip-planned-case','trip-planned','trip-actual-case','trip-actual',
         'trip-overlap-case','trip-overlap','trip-pts','trip-markers',
       ].forEach(id => { try { if (map.getLayer(id)) map.removeLayer(id); } catch (_) {} });
-      ['hm-points','hm-snapped',
+      ['hm-points','hm-snapped','hm-segments',
         'trip-planned-src','trip-actual-src','trip-overlap-src',
         'trip-pts-src','trip-markers-src',
       ].forEach(id => { try { if (map.getSource(id)) map.removeSource(id); } catch (_) {} });

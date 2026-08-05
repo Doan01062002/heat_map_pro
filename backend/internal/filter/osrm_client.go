@@ -129,3 +129,58 @@ func haversineDistance(lat1, lng1, lat2, lng2 float64) float64 {
 
 	return earthRadiusMeters * c
 }
+
+// SnapResult holds the result of snapping a GPS point to the nearest road.
+type SnapResult struct {
+	SnappedLat float64 // Latitude of the point on the road centerline
+	SnappedLng float64 // Longitude of the point on the road centerline
+	WayName    string  // OSM road/street name from OSRM
+	Distance   float64 // Distance in meters from original GPS to snapped point
+}
+
+// SnapToRoadWithName snaps a GPS point to the nearest road via OSRM /nearest
+// and returns the snapped coordinates plus the OSM road name.
+// This enables Lixel Binning: grouping deviation events by road name.
+func (c *osrmClient) SnapToRoadWithName(ctx context.Context, lat, lng float64) (SnapResult, error) {
+	url := fmt.Sprintf("%s/nearest/v1/driving/%.6f,%.6f?number=1", c.baseURL, lng, lat)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return SnapResult{}, fmt.Errorf("osrmClient.SnapToRoadWithName: create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return SnapResult{}, fmt.Errorf("osrmClient.SnapToRoadWithName: HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return SnapResult{}, fmt.Errorf("osrmClient.SnapToRoadWithName: OSRM returned status %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Code      string `json:"code"`
+		Waypoints []struct {
+			Location [2]float64 `json:"location"` // [lng, lat]
+			Name     string     `json:"name"`
+			Distance float64    `json:"distance"`
+		} `json:"waypoints"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return SnapResult{}, fmt.Errorf("osrmClient.SnapToRoadWithName: decode response: %w", err)
+	}
+
+	if result.Code != "Ok" || len(result.Waypoints) == 0 {
+		return SnapResult{}, fmt.Errorf("osrmClient.SnapToRoadWithName: no match (code=%s)", result.Code)
+	}
+
+	wp := result.Waypoints[0]
+	return SnapResult{
+		SnappedLat: wp.Location[1],
+		SnappedLng: wp.Location[0],
+		WayName:    wp.Name,
+		Distance:   wp.Distance,
+	}, nil
+}

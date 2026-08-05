@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS deviation_events (
     deviation_meters DOUBLE PRECISION NOT NULL,
     heading         REAL            DEFAULT 0,
     speed_kmh       REAL            DEFAULT 0,
+    way_name        VARCHAR(256)    DEFAULT '',
     created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 

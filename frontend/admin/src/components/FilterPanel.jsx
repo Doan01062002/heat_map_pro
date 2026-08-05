@@ -9,7 +9,7 @@ export default function FilterPanel({
   dateRange, onDateRangeChange,
   onFetchHistory, historyLoading,
   connectionStatus,
-  trips, selectedTripId, onSelectTrip,
+  trips, selectedTripId, selectedTrip, onSelectTrip,
 }) {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
@@ -182,6 +182,7 @@ export default function FilterPanel({
         <DriverList
           trips={trips}
           selectedTripId={selectedTripId}
+          selectedTrip={selectedTrip}
           onSelectTrip={onSelectTrip}
           loading={historyLoading}
         />

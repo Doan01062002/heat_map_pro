@@ -132,6 +132,15 @@ func main() {
 	// Road segment statistics for map click popup (Vietnamese stats)
 	mux.HandleFunc("GET /api/road-stats", pgWriter.HandleRoadStatsQuery)
 
+	// PostGIS: Store trip geometry and compute Fréchet/Hausdorff distances
+	mux.HandleFunc("POST /api/trip-geometry", pgWriter.UpdateTripGeometry)
+
+	// PostGIS: Query pre-computed trip distance metrics
+	mux.HandleFunc("GET /api/trip-metrics", pgWriter.HandleTripMetricsQuery)
+
+	// Lixel Binning: Deviation statistics aggregated by OSM road name
+	mux.HandleFunc("GET /api/road-stats-by-name", pgWriter.HandleRoadStatsByName)
+
 	// WebSocket: Driver GPS ingestion
 	mux.HandleFunc("/ws/driver", ingestHandler.HandleWebSocket)
 

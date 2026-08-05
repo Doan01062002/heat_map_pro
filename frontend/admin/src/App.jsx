@@ -34,8 +34,8 @@ export default function App() {
     setSelectedTrip(null);
     try {
       const [ptRes, trRes] = await Promise.all([
-        fetch(`${apiUrl}/api/points?from=${fromMs}&to=${toMs}&limit=75000`),
-        fetch(`${apiUrl}/api/trajectories?from=${fromMs}&to=${toMs}&limit=2000`),
+        fetch(`${apiUrl}/api/points?from=${fromMs}&to=${toMs}&limit=8000`),
+        fetch(`${apiUrl}/api/trajectories?from=${fromMs}&to=${toMs}&limit=300`),
       ]);
       const ptData = await ptRes.json();
       const trData = await trRes.json();
@@ -43,17 +43,27 @@ export default function App() {
       setHistoryPoints(ptData.points || []);
 
       // Extract trips from GeoJSON features for the sidebar list
+      // Sample trajectory coords to max 20 points to avoid performance issues in Heat-Lines
+      const sampleCoords = (coords, maxPts = 20) => {
+        if (!coords || coords.length <= maxPts) return coords;
+        const step = Math.floor(coords.length / maxPts);
+        const result = [];
+        for (let i = 0; i < coords.length; i += step) result.push(coords[i]);
+        if (result[result.length - 1] !== coords[coords.length - 1]) result.push(coords[coords.length - 1]);
+        return result;
+      };
+
       const features = trData.geojson?.features || [];
       const trips = features.map(f => ({
         trip_id:       f.properties.trip_id,
         driver_id:     f.properties.driver_id,
         avg_deviation: f.properties.avg_deviation,
         point_count:   f.properties.point_count,
-        // Coords for map overlay
-        coords: f.geometry.coordinates,
+        // Coords for map overlay — sampled for Heat-Lines performance
+        coords: sampleCoords(f.geometry.coordinates),
       }));
       setHistoryTrips(trips);
-      setHistoryTrajectories(trips); // same structure, used by HeatmapLayer for line rendering
+      setHistoryTrajectories(trips);
       setHistoryStats({ totalPoints: ptData.total || 0, totalTrips: trips.length });
     } catch (err) {
       console.error('History fetch failed:', err);
@@ -117,12 +127,42 @@ export default function App() {
         avoidanceRatio = Math.max(0, Math.min(100, Math.round((1 - overlapRatio) * 100)));
       }
 
+      // Step 3: Compute Fréchet & Hausdorff distances via PostGIS
+      let frechetDistance = null;
+      let hausdorffDistance = null;
+      let plannedLengthKm = null;
+      let actualLengthKm = null;
+      try {
+        const geoRes = await fetch(`${apiUrl}/api/trip-geometry`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            trip_id: trip.trip_id,
+            planned_coords: plannedRoute,  // [[lng, lat], ...]
+            actual_coords: actualRoute,    // [[lng, lat], ...]
+          }),
+        });
+        if (geoRes.ok) {
+          const geoData = await geoRes.json();
+          frechetDistance = geoData.frechet_distance;
+          hausdorffDistance = geoData.hausdorff_distance;
+          plannedLengthKm = geoData.planned_length_km;
+          actualLengthKm = geoData.actual_length_km;
+        }
+      } catch (geoErr) {
+        console.warn('Trip geometry metrics unavailable:', geoErr.message);
+      }
+
       setSelectedTrip(prev => prev?.trip_id === trip.trip_id
         ? {
             ...prev,
             matchedRoute: matched,
             plannedRoute: planned,
             avoidanceRatio,
+            frechetDistance,
+            hausdorffDistance,
+            plannedLengthKm,
+            actualLengthKm,
             osrmLoading: false
           }
         : prev
@@ -154,6 +194,7 @@ export default function App() {
         connectionStatus={connectionStatus}
         trips={mode === 'history' ? historyTrips : []}
         selectedTripId={selectedTrip?.trip_id}
+        selectedTrip={selectedTrip}
         onSelectTrip={handleSelectTrip}
       />
 
@@ -162,6 +203,7 @@ export default function App() {
         <MapContainer
           points={activePoints}
           selectedTrip={selectedTrip}
+          trajectories={mode === 'history' ? historyTrajectories : []}
         />
 
         {/* Loading overlay */}

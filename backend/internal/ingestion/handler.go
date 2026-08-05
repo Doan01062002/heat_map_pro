@@ -60,6 +60,7 @@ type DeviationEventData struct {
 	DeviationMeters float64
 	Heading         float32
 	SpeedKmh        float32
+	WayName         string // OSM road name from OSRM /nearest (for Lixel Binning)
 }
 
 // Waypoint represents a point on a planned route.

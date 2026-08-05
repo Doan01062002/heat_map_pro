@@ -30,6 +30,7 @@ type DeviationEvent struct {
 	Heading         float32
 	SpeedKmh        float32
 	Timestamp       time.Time
+	WayName         string // OSM road name from OSRM /nearest (for Lixel Binning)
 }
 
 // PostgresWriter handles batch inserts and historical queries.
@@ -119,8 +120,8 @@ func (w *PostgresWriter) flush(ctx context.Context) {
 	}
 
 	const insertSQL = `INSERT INTO deviation_events 
-		(driver_id, trip_id, latitude, longitude, h3_index, deviation_meters, heading, speed_kmh, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+		(driver_id, trip_id, latitude, longitude, h3_index, deviation_meters, heading, speed_kmh, way_name, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 
 	inserted := 0
 	for _, e := range events {
@@ -129,6 +130,7 @@ func (w *PostgresWriter) flush(ctx context.Context) {
 			e.Latitude, e.Longitude,
 			e.H3Index, e.DeviationMeters,
 			e.Heading, e.SpeedKmh,
+			e.WayName,
 			e.Timestamp,
 		)
 		if err != nil {
@@ -312,6 +314,146 @@ func (w *PostgresWriter) HandleDeviationsQuery(wr http.ResponseWriter, r *http.R
 // Close closes the PostgreSQL connection pool.
 func (w *PostgresWriter) Close() {
 	w.pool.Close()
+}
+
+// UpdateTripGeometry stores the planned and actual route geometries for a trip
+// and computes Fréchet & Hausdorff distances using PostGIS.
+// POST /api/trip-geometry
+// Body: { "trip_id": "...", "planned_coords": [[lng,lat],...], "actual_coords": [[lng,lat],...] }
+func (w *PostgresWriter) UpdateTripGeometry(wr http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		wr.WriteHeader(http.StatusOK)
+		return
+	}
+
+	var req struct {
+		TripID        string       `json:"trip_id"`
+		PlannedCoords [][2]float64 `json:"planned_coords"`
+		ActualCoords  [][2]float64 `json:"actual_coords"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(wr, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.TripID == "" || len(req.PlannedCoords) < 2 || len(req.ActualCoords) < 2 {
+		http.Error(wr, `{"error":"trip_id and at least 2 coords for planned/actual are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Build WKT LINESTRING from coordinates
+	buildWKT := func(coords [][2]float64) string {
+		var pts []string
+		for _, c := range coords {
+			pts = append(pts, fmt.Sprintf("%.7f %.7f", c[0], c[1]))
+		}
+		return fmt.Sprintf("SRID=4326;LINESTRING(%s)", joinStrings(pts, ","))
+	}
+
+	plannedWKT := buildWKT(req.PlannedCoords)
+	actualWKT := buildWKT(req.ActualCoords)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	// Update geometry and compute distances in one query
+	const query = `
+		UPDATE trips SET
+			planned_geom      = ST_GeomFromEWKT($2),
+			actual_geom       = ST_GeomFromEWKT($3),
+			planned_length_km = ST_Length(ST_GeomFromEWKT($2)::geography) / 1000.0,
+			actual_length_km  = ST_Length(ST_GeomFromEWKT($3)::geography) / 1000.0,
+			frechet_distance  = ST_FrechetDistance(
+				ST_GeomFromEWKT($2),
+				ST_GeomFromEWKT($3)
+			) * 111320.0,
+			hausdorff_distance = ST_HausdorffDistance(
+				ST_GeomFromEWKT($2),
+				ST_GeomFromEWKT($3)
+			) * 111320.0
+		WHERE trip_id = $1
+		RETURNING frechet_distance, hausdorff_distance, planned_length_km, actual_length_km
+	`
+
+	var frechet, hausdorff, plannedLen, actualLen float64
+	err := w.pool.QueryRow(ctx, query, req.TripID, plannedWKT, actualWKT).
+		Scan(&frechet, &hausdorff, &plannedLen, &actualLen)
+
+	if err != nil {
+		slog.Error("UpdateTripGeometry: query failed", "error", err, "trip_id", req.TripID)
+		// If trip doesn't exist yet, just return computed values without persisting
+		wr.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(wr).Encode(map[string]interface{}{
+			"trip_id":            req.TripID,
+			"frechet_distance":   0,
+			"hausdorff_distance": 0,
+			"planned_length_km":  0,
+			"actual_length_km":   0,
+			"note":               "trip not found in database, metrics not persisted",
+		})
+		return
+	}
+
+	wr.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(wr).Encode(map[string]interface{}{
+		"trip_id":            req.TripID,
+		"frechet_distance":   frechet,
+		"hausdorff_distance": hausdorff,
+		"planned_length_km":  plannedLen,
+		"actual_length_km":   actualLen,
+	})
+}
+
+// HandleTripMetricsQuery returns pre-computed Fréchet/Hausdorff metrics for a trip.
+// GET /api/trip-metrics?trip_id=<id>
+func (w *PostgresWriter) HandleTripMetricsQuery(wr http.ResponseWriter, r *http.Request) {
+	tripID := r.URL.Query().Get("trip_id")
+	if tripID == "" {
+		http.Error(wr, `{"error":"trip_id is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	var frechet, hausdorff, plannedLen, actualLen *float64
+	err := w.pool.QueryRow(ctx, `
+		SELECT frechet_distance, hausdorff_distance, planned_length_km, actual_length_km
+		FROM trips WHERE trip_id = $1
+	`, tripID).Scan(&frechet, &hausdorff, &plannedLen, &actualLen)
+
+	if err != nil {
+		wr.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(wr).Encode(map[string]interface{}{
+			"trip_id":            tripID,
+			"frechet_distance":   nil,
+			"hausdorff_distance": nil,
+			"note":               "no metrics available",
+		})
+		return
+	}
+
+	wr.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(wr).Encode(map[string]interface{}{
+		"trip_id":            tripID,
+		"frechet_distance":   frechet,
+		"hausdorff_distance": hausdorff,
+		"planned_length_km":  plannedLen,
+		"actual_length_km":   actualLen,
+	})
+}
+
+// joinStrings joins a slice of strings with a separator.
+func joinStrings(parts []string, sep string) string {
+	result := ""
+	for i, p := range parts {
+		if i > 0 {
+			result += sep
+		}
+		result += p
+	}
+	return result
 }
 
 // HandlePointsQuery handles GET /api/points?from=<ms>&to=<ms>&limit=<n>
@@ -579,5 +721,93 @@ func (w *PostgresWriter) HandleRoadStatsQuery(wr http.ResponseWriter, r *http.Re
 		"high_dev_trips":  highDevTrips,
 		"normal_trips":   normalTrips,
 		"avoid_ratio":    avoidRatio,
+	})
+}
+
+// HandleRoadStatsByName returns deviation statistics aggregated by OSM road name.
+// GET /api/road-stats-by-name?from=<ms>&to=<ms>&limit=<n>
+// Used for Lixel Binning analysis: "Which roads have the most deviations?"
+func (w *PostgresWriter) HandleRoadStatsByName(wr http.ResponseWriter, r *http.Request) {
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+	limitStr := r.URL.Query().Get("limit")
+
+	if fromStr == "" || toStr == "" {
+		http.Error(wr, `{"error":"from and to are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	fromMS, err := strconv.ParseInt(fromStr, 10, 64)
+	if err != nil {
+		http.Error(wr, `{"error":"invalid from"}`, http.StatusBadRequest)
+		return
+	}
+	toMS, err := strconv.ParseInt(toStr, 10, 64)
+	if err != nil {
+		http.Error(wr, `{"error":"invalid to"}`, http.StatusBadRequest)
+		return
+	}
+
+	limit := 50
+	if limitStr != "" {
+		if v, err := strconv.Atoi(limitStr); err == nil && v > 0 && v <= 200 {
+			limit = v
+		}
+	}
+
+	fromTime := time.UnixMilli(fromMS)
+	toTime := time.UnixMilli(toMS)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+
+	const query = `
+		SELECT
+			way_name,
+			COUNT(*)                                         AS event_count,
+			COUNT(DISTINCT trip_id)                           AS unique_trips,
+			COUNT(DISTINCT driver_id)                         AS unique_drivers,
+			ROUND(AVG(deviation_meters)::NUMERIC, 1)::FLOAT8 AS avg_deviation,
+			ROUND(MAX(deviation_meters)::NUMERIC, 1)::FLOAT8 AS max_deviation
+		FROM deviation_events
+		WHERE created_at >= $1
+		  AND created_at <= $2
+		  AND way_name != ''
+		GROUP BY way_name
+		ORDER BY event_count DESC
+		LIMIT $3
+	`
+
+	rows, err := w.pool.Query(ctx, query, fromTime, toTime, limit)
+	if err != nil {
+		slog.Error("road-stats-by-name query failed", "err", err)
+		http.Error(wr, "query error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type RoadStat struct {
+		WayName       string  `json:"way_name"`
+		EventCount    int64   `json:"event_count"`
+		UniqueTrips   int64   `json:"unique_trips"`
+		UniqueDrivers int64   `json:"unique_drivers"`
+		AvgDeviation  float64 `json:"avg_deviation"`
+		MaxDeviation  float64 `json:"max_deviation"`
+	}
+
+	var results []RoadStat
+	for rows.Next() {
+		var rs RoadStat
+		if err := rows.Scan(&rs.WayName, &rs.EventCount, &rs.UniqueTrips,
+			&rs.UniqueDrivers, &rs.AvgDeviation, &rs.MaxDeviation); err != nil {
+			continue
+		}
+		results = append(results, rs)
+	}
+
+	wr.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(wr).Encode(map[string]interface{}{
+		"roads": results,
+		"total": len(results),
 	})
 }
