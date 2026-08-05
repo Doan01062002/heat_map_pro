@@ -403,7 +403,7 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
       type: 'geojson',
       data: {
         type: 'FeatureCollection',
-        features: coords.map((c, i) => ({
+        features: actualCoords.map((c, i) => ({
           type: 'Feature', geometry: { type: 'Point', coordinates: c }, properties: { idx: i },
         })),
       },
