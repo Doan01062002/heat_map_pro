@@ -6,25 +6,25 @@ import { useHeatmapStream } from './hooks/useHeatmapStream';
 import { matchTripToRoads, getPlannedRoute, computeH3Overlap } from './utils/osrmRouting';
 
 const PORTO_FROM = 1372636800000; // 2013-07-01
-const PORTO_TO   = 1377907200000; // 2013-08-31
+const PORTO_TO = 1377907200000; // 2013-08-31
 
 export default function App() {
   const [mode, setMode] = useState('history');
 
-  const wsUrl  = import.meta.env.VITE_ADMIN_WS_URL || 'ws://localhost:8080/ws/admin';
-  const apiUrl = import.meta.env.VITE_API_URL       || 'http://localhost:8080';
+  const wsUrl = import.meta.env.VITE_ADMIN_WS_URL || 'ws://localhost:8080/ws/admin';
+  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 
   // Live stream
   const { cells: liveCells, stats: liveStats, connectionStatus, clearCells } =
     useHeatmapStream(wsUrl, mode === 'live');
 
   // History data
-  const [historyPoints,      setHistoryPoints]      = useState([]);
-  const [historyTrips,       setHistoryTrips]       = useState([]);
+  const [historyPoints, setHistoryPoints] = useState([]);
+  const [historyTrips, setHistoryTrips] = useState([]);
   const [historyTrajectories, setHistoryTrajectories] = useState([]);
-  const [historyStats,       setHistoryStats]       = useState({ totalPoints: 0, totalTrips: 0 });
+  const [historyStats, setHistoryStats] = useState({ totalPoints: 0, totalTrips: 0 });
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [dateRange,      setDateRange]      = useState({ from: null, to: null });
+  const [dateRange, setDateRange] = useState({ from: null, to: null });
 
   // Selected trip for route detail
   const [selectedTrip, setSelectedTrip] = useState(null);
@@ -34,8 +34,8 @@ export default function App() {
     setSelectedTrip(null);
     try {
       const [ptRes, trRes] = await Promise.all([
-        fetch(`${apiUrl}/api/points?from=${fromMs}&to=${toMs}&limit=75000`),
-        fetch(`${apiUrl}/api/trajectories?from=${fromMs}&to=${toMs}&limit=2000`),
+        fetch(`${apiUrl}/api/points?from=${fromMs}&to=${toMs}`),
+        fetch(`${apiUrl}/api/trajectories?from=${fromMs}&to=${toMs}`),
       ]);
       const ptData = await ptRes.json();
       const trData = await trRes.json();
@@ -45,10 +45,10 @@ export default function App() {
       // Extract trips from GeoJSON features for the sidebar list
       const features = trData.geojson?.features || [];
       const trips = features.map(f => ({
-        trip_id:       f.properties.trip_id,
-        driver_id:     f.properties.driver_id,
+        trip_id: f.properties.trip_id,
+        driver_id: f.properties.driver_id,
         avg_deviation: f.properties.avg_deviation,
-        point_count:   f.properties.point_count,
+        point_count: f.properties.point_count,
         // Coords for map overlay
         coords: f.geometry.coordinates,
       }));
@@ -90,14 +90,14 @@ export default function App() {
 
     // Step 1: Show immediately with raw GPS (user sees route right away)
     const base = {
-      trip_id:       trip.trip_id,
-      driver_id:     trip.driver_id,
+      trip_id: trip.trip_id,
+      driver_id: trip.driver_id,
       avg_deviation: trip.avg_deviation,
-      point_count:   trip.point_count,
-      coords:        trip.coords,
-      matchedRoute:  null,   // loading
-      plannedRoute:  null,   // loading
-      osrmLoading:   true,
+      point_count: trip.point_count,
+      coords: trip.coords,
+      matchedRoute: null,   // loading
+      plannedRoute: null,   // loading
+      osrmLoading: true,
     };
     setSelectedTrip(base);
 
@@ -119,12 +119,12 @@ export default function App() {
 
       setSelectedTrip(prev => prev?.trip_id === trip.trip_id
         ? {
-            ...prev,
-            matchedRoute: matched,
-            plannedRoute: planned,
-            avoidanceRatio,
-            osrmLoading: false
-          }
+          ...prev,
+          matchedRoute: matched,
+          plannedRoute: planned,
+          avoidanceRatio,
+          osrmLoading: false
+        }
         : prev
       );
     } catch (err) {
@@ -137,7 +137,7 @@ export default function App() {
   };
 
   const activePoints = mode === 'live' ? [] : historyPoints;
-  const activeStats  = mode === 'live'
+  const activeStats = mode === 'live'
     ? { totalDrivers: liveStats.totalDrivers, totalDeviations: liveStats.totalDeviations, hotCells: liveCells.length }
     : { totalDrivers: historyStats.totalTrips, totalDeviations: historyStats.totalPoints, hotCells: historyStats.totalTrips };
 
@@ -178,7 +178,6 @@ export default function App() {
             }}>
               <div style={{ fontSize: '32px', marginBottom: '12px' }}>⏳</div>
               <div style={{ fontSize: '16px', fontWeight: 700 }}>Đang tải dữ liệu…</div>
-              <div style={{ fontSize: '12px', color: '#666', marginTop: '6px' }}>Fetching 75,000 GPS points & 1,977 trajectories</div>
             </div>
           </div>
         )}
