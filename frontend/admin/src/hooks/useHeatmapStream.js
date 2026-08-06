@@ -9,7 +9,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  * @param {string} url - WebSocket URL (ws://host:port/ws/admin)
  * @param {boolean} enabled - Whether to connect (false when in history mode)
  */
-export function useHeatmapStream(url, enabled = true) {
+export function useHeatmapStream(url, enabled = true, onNewTrip = null) {
   const [cells, setCells] = useState([]);
   const [stats, setStats] = useState({
     totalDrivers: 0,
@@ -22,6 +22,9 @@ export function useHeatmapStream(url, enabled = true) {
   const cellMapRef = useRef(new Map()); // h3_index → cell data
   const reconnectTimerRef = useRef(null);
 
+  const onNewTripRef = useRef(onNewTrip);
+  useEffect(() => { onNewTripRef.current = onNewTrip; }, [onNewTrip]);
+
   const CELL_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
   const clearCells = useCallback(() => {
@@ -32,7 +35,6 @@ export function useHeatmapStream(url, enabled = true) {
 
   useEffect(() => {
     if (!enabled) {
-      // Disconnect when not in live mode
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
@@ -56,6 +58,14 @@ export function useHeatmapStream(url, enabled = true) {
         try {
           const update = JSON.parse(event.data);
           const now = Date.now();
+
+          // Handle Realtime New Trip Event
+          if (update.type === 'new_trip' && update.trip) {
+            if (onNewTripRef.current) {
+              onNewTripRef.current(update.trip);
+            }
+            return;
+          }
 
           // Update stats
           setStats({

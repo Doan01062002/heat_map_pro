@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import MapContainer from './components/MapContainer';
 import FilterPanel from './components/FilterPanel';
 import StatsOverlay from './components/StatsOverlay';
+import ToastNotification from './components/ToastNotification';
 import { useHeatmapStream } from './hooks/useHeatmapStream';
 import { matchTripToRoads, getPlannedRoute, computeH3Overlap } from './utils/osrmRouting';
 
@@ -14,9 +15,42 @@ export default function App() {
   const wsUrl = import.meta.env.VITE_ADMIN_WS_URL || 'ws://localhost:8080/ws/admin';
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 
-  // Live stream
+  // Live Realtime State
+  const [liveTrips, setLiveTrips] = useState([]);
+  const [toastNotification, setToastNotification] = useState(null);
+
+  // Handle Realtime New Trip Event from WebSocket
+  const handleNewTrip = useCallback((newTrip) => {
+    console.log('[Admin Realtime] New trip received:', newTrip);
+    setToastNotification({ id: Date.now(), trip: newTrip });
+
+    setLiveTrips((prev) => {
+      const exists = prev.some((t) => t.trip_id === newTrip.trip_id);
+      if (exists) return prev;
+      return [newTrip, ...prev];
+    });
+  }, []);
+
+  // Live stream hook
   const { cells: liveCells, stats: liveStats, connectionStatus, clearCells } =
-    useHeatmapStream(wsUrl, mode === 'live');
+    useHeatmapStream(wsUrl, mode === 'live', handleNewTrip);
+
+  // Fetch initial live trips from backend
+  const fetchLiveTrips = useCallback(async () => {
+    try {
+      const res = await fetch(`${apiUrl}/api/trips?limit=50`);
+      if (res.ok) {
+        const data = await res.json();
+        setLiveTrips(data.trips || []);
+      }
+    } catch (err) {
+      console.warn('[Fetch Live Trips Error]', err);
+    }
+  }, [apiUrl]);
+
+  useEffect(() => {
+    fetchLiveTrips();
+  }, [fetchLiveTrips]);
 
   // History data
   const [historyPoints, setHistoryPoints] = useState([]);
@@ -33,28 +67,55 @@ export default function App() {
     setHistoryLoading(true);
     setSelectedTrip(null);
     try {
-      const [ptRes, trRes] = await Promise.all([
-        fetch(`${apiUrl}/api/points?from=${fromMs}&to=${toMs}`),
-        fetch(`${apiUrl}/api/trajectories?from=${fromMs}&to=${toMs}`),
+      const fromParam = fromMs || PORTO_FROM;
+      const toParam = (toMs && toMs !== PORTO_TO) ? toMs : Date.now() + 86400000;
+      const [ptRes, trRes, tripsRes] = await Promise.all([
+        fetch(`${apiUrl}/api/points?from=${fromParam}&to=${toParam}`),
+        fetch(`${apiUrl}/api/trajectories?from=${fromParam}&to=${toParam}`),
+        fetch(`${apiUrl}/api/trips?limit=100`),
       ]);
       const ptData = await ptRes.json();
       const trData = await trRes.json();
+      const dbTripsData = await tripsRes.json();
 
-      setHistoryPoints(ptData.points || []);
+      let allPoints = ptData.points || [];
 
-      // Extract trips from GeoJSON features for the sidebar list
+      // Extract GPS points from DB trips actual_route for Heatmap & 3D H3 Grid rendering
+      const dbTrips = dbTripsData.trips || [];
+      dbTrips.forEach((t) => {
+        let route = t.actual_route || t.actual_route_json;
+        if (typeof route === 'string') {
+          try { route = JSON.parse(route); } catch (_) { route = []; }
+        }
+        if (Array.isArray(route) && route.length > 0) {
+          route.forEach(([lng, lat]) => {
+            allPoints.push({ lat, lng, deviation: t.is_deviated ? 120 : 15 });
+          });
+        }
+      });
+
+      setHistoryPoints(allPoints);
+
       const features = trData.geojson?.features || [];
-      const trips = features.map(f => ({
+      const trajTrips = features.map(f => ({
         trip_id: f.properties.trip_id,
         driver_id: f.properties.driver_id,
         avg_deviation: f.properties.avg_deviation,
         point_count: f.properties.point_count,
-        // Coords for map overlay
         coords: f.geometry.coordinates,
       }));
-      setHistoryTrips(trips);
-      setHistoryTrajectories(trips); // same structure, used by HeatmapLayer for line rendering
-      setHistoryStats({ totalPoints: ptData.total || 0, totalTrips: trips.length });
+
+      // Combine trajectories with DB saved trips
+      const combinedTrips = [...dbTrips];
+      trajTrips.forEach(tt => {
+        if (!combinedTrips.some(dt => dt.trip_id === tt.trip_id)) {
+          combinedTrips.push(tt);
+        }
+      });
+
+      setHistoryTrips(combinedTrips);
+      setHistoryTrajectories(combinedTrips);
+      setHistoryStats({ totalPoints: allPoints.length, totalTrips: combinedTrips.length });
     } catch (err) {
       console.error('History fetch failed:', err);
     } finally {
@@ -64,7 +125,6 @@ export default function App() {
 
   const [fetchError, setFetchError] = useState(null);
 
-  // Auto-load Porto data on mount — retry up to 3 times if backend not ready
   useEffect(() => {
     let retries = 0;
     const tryFetch = async () => {
@@ -83,56 +143,93 @@ export default function App() {
     tryFetch();
   }, []);
 
-
-  // Handle trip selection — immediately show raw GPS, then upgrade to OSRM-matched route
   const handleSelectTrip = async (trip) => {
     if (!trip) { setSelectedTrip(null); return; }
 
-    // Step 1: Show immediately with raw GPS (user sees route right away)
+    let actualRoute = trip.actual_route || trip.coords || [];
+    if (typeof actualRoute === 'string') {
+      try { actualRoute = JSON.parse(actualRoute); } catch (_) { actualRoute = []; }
+    }
+
+    let plannedRoute = trip.waypoints || [];
+    if (typeof plannedRoute === 'string') {
+      try { plannedRoute = JSON.parse(plannedRoute); } catch (_) { plannedRoute = []; }
+    }
+
+    // Fallback if actualRoute missing
+    if ((!actualRoute || actualRoute.length < 2) && plannedRoute.length >= 2) {
+      actualRoute = plannedRoute;
+    }
+
+    if ((!actualRoute || actualRoute.length < 2) && trip.origin && trip.destination) {
+      const origLat = trip.origin.lat || trip.origin.latitude;
+      const origLng = trip.origin.lng || trip.origin.longitude;
+      const destLat = trip.destination.lat || trip.destination.latitude;
+      const destLng = trip.destination.lng || trip.destination.longitude;
+      if (origLat && origLng && destLat && destLng) {
+        actualRoute = [[origLng, origLat], [destLng, destLat]];
+      }
+    }
+
+    const rawCoords = actualRoute;
+
+    // Base state with initial routes
     const base = {
       trip_id: trip.trip_id,
       driver_id: trip.driver_id,
-      avg_deviation: trip.avg_deviation,
-      point_count: trip.point_count,
-      coords: trip.coords,
-      matchedRoute: null,   // loading
-      plannedRoute: null,   // loading
+      driver_name: trip.driver_name || trip.driver_id,
+      avg_deviation: trip.avg_deviation || (trip.is_deviated ? 1500 : 0),
+      point_count: trip.point_count || rawCoords.length,
+      coords: rawCoords,
+      matchedRoute: actualRoute.length >= 2 ? actualRoute : null,
+      plannedRoute: plannedRoute.length >= 2 ? plannedRoute : null,
+      avoidanceRatio: 0,
       osrmLoading: true,
     };
     setSelectedTrip(base);
 
-    // Step 2: Fetch OSRM map matching + planned route in parallel
-    try {
-      const [matched, planned] = await Promise.all([
-        matchTripToRoads(trip.coords),
-        getPlannedRoute(trip.coords),           // pass full coords for intermediate waypoints
-      ]);
+    if (rawCoords.length >= 2) {
+      try {
+        const startPt = rawCoords[0];
+        const endPt = rawCoords[rawCoords.length - 1];
 
-      const actualRoute = matched || trip.coords;
-      const plannedRoute = planned || [trip.coords[0], trip.coords[trip.coords.length - 1]];
+        // 1. Match actual route to road network
+        const matched = await matchTripToRoads(rawCoords);
+        const finalActual = matched || actualRoute;
 
-      let avoidanceRatio = 0;
-      if (actualRoute && plannedRoute) {
-        const { overlapRatio } = computeH3Overlap(actualRoute, plannedRoute, 10);
-        avoidanceRatio = Math.max(0, Math.min(100, Math.round((1 - overlapRatio) * 100)));
-      }
-
-      setSelectedTrip(prev => prev?.trip_id === trip.trip_id
-        ? {
-          ...prev,
-          matchedRoute: matched,
-          plannedRoute: planned,
-          avoidanceRatio,
-          osrmLoading: false
+        // 2. Compute true planned route between ONLY startPt and endPt if plannedRoute isn't detailed
+        let finalPlanned = plannedRoute;
+        if (!finalPlanned || finalPlanned.length < 2) {
+          finalPlanned = await getPlannedRoute([startPt, endPt]);
         }
-        : prev
-      );
-    } catch (err) {
-      console.error('OSRM failed:', err);
-      setSelectedTrip(prev => prev?.trip_id === trip.trip_id
-        ? { ...prev, osrmLoading: false }
-        : prev
-      );
+        if (!finalPlanned || finalPlanned.length < 2) {
+          finalPlanned = [startPt, endPt];
+        }
+
+        // 3. Compute avoidance ratio using H3 hexagon cell overlap
+        let avoidanceRatio = 0;
+        if (finalActual && finalPlanned) {
+          const { overlapRatio } = computeH3Overlap(finalActual, finalPlanned, 10);
+          avoidanceRatio = Math.max(0, Math.min(100, Math.round((1 - overlapRatio) * 100)));
+        }
+
+        setSelectedTrip(prev => prev?.trip_id === trip.trip_id
+          ? {
+            ...prev,
+            matchedRoute: finalActual,
+            plannedRoute: finalPlanned,
+            avoidanceRatio,
+            osrmLoading: false
+          }
+          : prev
+        );
+      } catch (err) {
+        console.warn('OSRM trip lookup failed:', err);
+        setSelectedTrip(prev => prev?.trip_id === trip.trip_id
+          ? { ...prev, osrmLoading: false }
+          : prev
+        );
+      }
     }
   };
 
@@ -142,7 +239,13 @@ export default function App() {
     : { totalDrivers: historyStats.totalTrips, totalDeviations: historyStats.totalPoints, hotCells: historyStats.totalTrips };
 
   return (
-    <div style={{ display: 'flex', height: '100vh', fontFamily: 'Inter, sans-serif', background: '#0a0a1a' }}>
+    <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden', fontFamily: 'Inter, sans-serif', background: '#0a0a1a' }}>
+      {/* Realtime Toast Notification */}
+      <ToastNotification
+        toast={toastNotification}
+        onClose={() => setToastNotification(null)}
+      />
+
       {/* Sidebar */}
       <FilterPanel
         mode={mode}
@@ -152,7 +255,7 @@ export default function App() {
         onFetchHistory={fetchHistory}
         historyLoading={historyLoading}
         connectionStatus={connectionStatus}
-        trips={mode === 'history' ? historyTrips : []}
+        trips={mode === 'history' ? historyTrips : liveTrips}
         selectedTripId={selectedTrip?.trip_id}
         onSelectTrip={handleSelectTrip}
       />
@@ -182,34 +285,6 @@ export default function App() {
           </div>
         )}
 
-        {/* No-data notice with reload button */}
-        {!historyLoading && historyPoints.length === 0 && (
-          <div style={{
-            position: 'absolute', top: '50%', left: '50%',
-            transform: 'translate(-50%,-50%)',
-            background: 'rgba(15,12,41,0.95)',
-            border: '1px solid rgba(255,100,100,0.3)',
-            borderRadius: '16px', padding: '28px 36px', textAlign: 'center', color: '#e0e0ff',
-            zIndex: 20, minWidth: '280px',
-          }}>
-            <div style={{ fontSize: '32px', marginBottom: '12px' }}>⚠️</div>
-            <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '8px' }}>Chưa có dữ liệu</div>
-            <div style={{ fontSize: '12px', color: '#666', marginBottom: '16px' }}>
-              {fetchError || 'Backend đang khởi động hoặc chưa có data.'}
-            </div>
-            <button
-              onClick={() => fetchHistory(PORTO_FROM, PORTO_TO)}
-              style={{
-                padding: '10px 24px', borderRadius: '10px', border: 'none', cursor: 'pointer',
-                background: 'linear-gradient(135deg,#6c63ff,#4834d4)', color: '#fff',
-                fontSize: '14px', fontWeight: 700,
-              }}
-            >
-              🔄 Tải lại dữ liệu
-            </button>
-          </div>
-        )}
-
         {/* Trip detail banner when selected */}
         {selectedTrip && (
           <div style={{
@@ -225,7 +300,7 @@ export default function App() {
           }}>
             <div>
               <div style={{ color: '#555', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Driver</div>
-              <div style={{ color: '#e0e0ff', fontWeight: 700, fontSize: '13px' }}>{selectedTrip.driver_id}</div>
+              <div style={{ color: '#e0e0ff', fontWeight: 700, fontSize: '13px' }}>{selectedTrip.driver_name || selectedTrip.driver_id}</div>
             </div>
             <div>
               <div style={{ color: '#555', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>GPS Points</div>
@@ -247,40 +322,6 @@ export default function App() {
                 {selectedTrip.osrmLoading ? '…' : `${selectedTrip.avoidanceRatio ?? 0}%`}
               </div>
             </div>
-            <div style={{ borderLeft: '1px solid rgba(255,255,255,0.1)', paddingLeft: '20px' }}>
-              {selectedTrip.osrmLoading ? (
-                <div style={{ color: '#666', fontSize: '11px' }}>⏳ Đang map matching…</div>
-              ) : (
-                <div style={{ fontSize: '11.5px', lineHeight: 2 }}>
-                  <div>
-                    <span style={{ color: '#29b6f6', marginRight: '6px' }}>━ ╌ ━</span>
-                    <span style={{ color: '#aaa' }}>
-                      {selectedTrip.plannedRoute ? 'Tuyến dự kiến (OSRM)' : 'Tuyến dự kiến (fallback)'}
-                    </span>
-                  </div>
-                  <div>
-                    <span style={{ color: '#ff6b35', marginRight: '6px' }}>━━━</span>
-                    <span style={{ color: selectedTrip.matchedRoute ? '#4caf50' : '#ff9800' }}>
-                      {selectedTrip.matchedRoute ? '✓ Đường thực tế (map matched)' : '⚠ Đường thực tế (raw GPS)'}
-                    </span>
-                  </div>
-                  <div>
-                    <span style={{ color: '#e040fb', marginRight: '6px' }}>━━━</span>
-                    <span style={{ color: '#aaa' }}>Đoạn trùng nhau</span>
-                  </div>
-                  <div style={{ display: 'flex', gap: '12px', marginTop: '2px' }}>
-                    <span>
-                      <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: '#00e676', border: '2px solid #fff', verticalAlign: 'middle', marginRight: 4 }} />
-                      <span style={{ color: '#aaa', fontSize: '10.5px' }}>Điểm đầu</span>
-                    </span>
-                    <span>
-                      <span style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: '#ff1744', border: '2px solid #fff', verticalAlign: 'middle', marginRight: 4 }} />
-                      <span style={{ color: '#aaa', fontSize: '10.5px' }}>Điểm cuối</span>
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
             <button
               onClick={() => setSelectedTrip(null)}
               style={{
@@ -291,7 +332,6 @@ export default function App() {
             >✕</button>
           </div>
         )}
-
 
         <StatsOverlay stats={activeStats} mode={mode} connectionStatus={connectionStatus} />
       </div>

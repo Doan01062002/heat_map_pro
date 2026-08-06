@@ -138,6 +138,11 @@ func (p *RedisPublisher) flush(ctx context.Context, agg *aggregator.Aggregator) 
 	)
 }
 
+// PublishRaw publishes raw JSON payload bytes to the Redis channel (e.g. new_trip events).
+func (p *RedisPublisher) PublishRaw(ctx context.Context, payload []byte) error {
+	return p.client.Publish(ctx, p.channel, payload).Err()
+}
+
 // Close closes the Redis connection.
 func (p *RedisPublisher) Close() error {
 	return p.client.Close()

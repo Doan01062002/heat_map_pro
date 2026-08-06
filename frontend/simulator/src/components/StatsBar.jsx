@@ -3,7 +3,7 @@ import React from 'react';
 /**
  * StatsBar — Top bar showing real-time simulation metrics.
  */
-export default function StatsBar({ stats, connectionStatus, isRunning }) {
+export default function StatsBar({ stats, connectionStatus, isRunning, driver, onOpenAuth, onLogout }) {
   const statusColor = {
     connected: '#44ff44',
     connecting: '#ffaa44',
@@ -38,7 +38,7 @@ export default function StatsBar({ stats, connectionStatus, isRunning }) {
         </span>
       </div>
 
-      <div style={{ display: 'flex', gap: '24px', alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
         <MetricBadge label="Active Drivers" value={stats.activeDrivers} color="#6c63ff" />
         <MetricBadge label="Points Sent" value={stats.pointsSent.toLocaleString()} color="#44ddff" />
         <MetricBadge label="Batches" value={stats.batchesSent} color="#ff9f43" />
@@ -52,6 +52,42 @@ export default function StatsBar({ stats, connectionStatus, isRunning }) {
             WS: {connectionStatus}
           </span>
         </div>
+
+        {/* Driver Auth Badge / Button */}
+        {driver ? (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '10px',
+            backgroundColor: 'rgba(99, 102, 241, 0.15)', border: '1px solid rgba(99, 102, 241, 0.3)',
+            borderRadius: '20px', padding: '4px 14px',
+          }}>
+            <div style={{ fontSize: '13px', color: '#e2e8f0' }}>
+              👤 <strong>{driver.full_name}</strong> <span style={{ color: '#818cf8', fontSize: '11px' }}>({driver.driver_id})</span>
+            </div>
+            <button
+              type="button"
+              onClick={onLogout}
+              title="Đăng xuất"
+              style={{
+                background: 'none', border: 'none', color: '#ef4444',
+                fontSize: '12px', fontWeight: 600, cursor: 'pointer', marginLeft: '4px'
+              }}
+            >
+              Đăng xuất
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={onOpenAuth}
+            style={{
+              backgroundColor: '#6366f1', color: '#fff', border: 'none',
+              borderRadius: '20px', padding: '6px 16px', fontSize: '13px',
+              fontWeight: 600, cursor: 'pointer', boxShadow: '0 2px 10px rgba(99, 102, 241, 0.4)'
+            }}
+          >
+            🔑 Đăng nhập / Đăng ký
+          </button>
+        )}
       </div>
     </div>
   );

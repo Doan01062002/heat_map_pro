@@ -6,27 +6,36 @@ import React, { useState } from 'react';
  */
 export default function DriverList({ trips = [], selectedTripId, onSelectTrip, loading }) {
   const [search, setSearch] = useState('');
-  const [sortBy, setSortBy] = useState('deviation'); // 'deviation' | 'points'
+  const [sortBy, setSortBy] = useState('newest'); // 'newest' | 'deviation' | 'points'
 
   const filtered = trips
-    .filter(t =>
-      t.driver_id.toLowerCase().includes(search.toLowerCase()) ||
-      t.trip_id.toLowerCase().includes(search.toLowerCase())
-    )
-    .sort((a, b) =>
-      sortBy === 'deviation'
-        ? b.avg_deviation - a.avg_deviation
-        : b.point_count - a.point_count
-    );
+    .filter(t => {
+      const q = search.toLowerCase();
+      const dId = (t.driver_id || '').toLowerCase();
+      const tId = (t.trip_id || '').toLowerCase();
+      const dName = (t.driver_name || '').toLowerCase();
+      const orig = (t.origin?.label || '').toLowerCase();
+      const dest = (t.destination?.label || '').toLowerCase();
+      return dId.includes(q) || tId.includes(q) || dName.includes(q) || orig.includes(q) || dest.includes(q);
+    })
+    .sort((a, b) => {
+      if (sortBy === 'newest') return (b.created_at || 0) - (a.created_at || 0);
+      if (sortBy === 'deviation') return (b.avg_deviation || (b.is_deviated ? 1000 : 0)) - (a.avg_deviation || (a.is_deviated ? 1000 : 0));
+      return (b.point_count || 0) - (a.point_count || 0);
+    });
 
-  const deviationColor = (dev) => {
+  const deviationColor = (dev, isDeviated) => {
+    if (isDeviated) return '#ff2244';
+    if (!dev) return '#00e664';
     if (dev < 500)   return '#00e664';
     if (dev < 2000)  return '#ccee00';
     if (dev < 10000) return '#ff8800';
     return '#ff2244';
   };
 
-  const formatDev = (meters) => {
+  const formatDev = (meters, distanceKm, isDeviated) => {
+    if (distanceKm) return `${distanceKm} km`;
+    if (!meters) return isDeviated ? '🔴 Bẻ lái' : '🟢 Đúng tuyến';
     if (meters >= 1000) return `${(meters / 1000).toFixed(1)}km`;
     return `${Math.round(meters)}m`;
   };
@@ -65,7 +74,7 @@ export default function DriverList({ trips = [], selectedTripId, onSelectTrip, l
 
         {/* Sort toggle */}
         <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
-          {[['deviation', 'Deviation'], ['points', 'Points']].map(([key, label]) => (
+          {[['newest', 'Newest'], ['deviation', 'Deviation'], ['points', 'Points']].map(([key, label]) => (
             <button
               key={key}
               onClick={() => setSortBy(key)}
@@ -101,7 +110,11 @@ export default function DriverList({ trips = [], selectedTripId, onSelectTrip, l
         )}
         {filtered.map(trip => {
           const isSelected = trip.trip_id === selectedTripId;
-          const color = deviationColor(trip.avg_deviation);
+          const color = deviationColor(trip.avg_deviation, trip.is_deviated);
+          const name = trip.driver_name || trip.driver_id;
+          const origLabel = trip.origin?.label;
+          const destLabel = trip.destination?.label;
+
           return (
             <div
               key={trip.trip_id}
@@ -119,19 +132,26 @@ export default function DriverList({ trips = [], selectedTripId, onSelectTrip, l
               onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; }}
               onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
             >
-              {/* Driver ID */}
+              {/* Driver ID & Name */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ color: '#c0c0e0', fontSize: '12px', fontWeight: 600 }}>
-                  {trip.driver_id.replace('taxi-', 'Taxi ')}
+                  {name.replace('taxi-', 'Taxi ')}
                 </span>
                 <span style={{
                   fontSize: '11px', fontWeight: 700, color,
                   background: `${color}18`,
                   padding: '2px 7px', borderRadius: '6px',
                 }}>
-                  {formatDev(trip.avg_deviation)}
+                  {formatDev(trip.avg_deviation, trip.distance_km, trip.is_deviated)}
                 </span>
               </div>
+
+              {/* Origin -> Destination if present */}
+              {origLabel && destLabel && (
+                <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  🟢 {origLabel} → 📍 {destLabel}
+                </div>
+              )}
 
               {/* Trip ID + points */}
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px' }}>
@@ -139,7 +159,7 @@ export default function DriverList({ trips = [], selectedTripId, onSelectTrip, l
                   {trip.trip_id.slice(-8)}
                 </span>
                 <span style={{ color: '#555', fontSize: '10px' }}>
-                  {trip.point_count} pts
+                  {trip.created_at ? new Date(trip.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : `${trip.point_count || 0} pts`}
                 </span>
               </div>
 
@@ -153,7 +173,7 @@ export default function DriverList({ trips = [], selectedTripId, onSelectTrip, l
                   color: '#8888cc',
                   lineHeight: 1.7,
                 }}>
-                  <div>{trip.point_count} GPS waypoints</div>
+                  <div>{trip.point_count || (trip.actual_route?.length || 0)} GPS waypoints</div>
                   <div style={{ color: '#4fc3f7' }}>━━ Planned route (origin→dest)</div>
                   <div style={{ color: '#ff6b35' }}>━━ Actual GPS path</div>
                 </div>
