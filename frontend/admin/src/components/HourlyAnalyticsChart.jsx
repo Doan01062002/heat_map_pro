@@ -32,7 +32,7 @@ export default function HourlyAnalyticsChart() {
         padding: '14px', textAlign: 'center', color: '#888', fontSize: '12px',
         background: 'rgba(15,12,41,0.6)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)'
       }}>
-        ⏳ Đang nạp dữ liệu 24h…
+        Đang nạp dữ liệu 24h…
       </div>
     );
   }
@@ -78,7 +78,7 @@ export default function HourlyAnalyticsChart() {
       <div style={{ marginBottom: '8px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
           <div style={{ fontWeight: 800, fontSize: '13px', color: '#fff' }}>
-            📈 Mật Độ Bẻ Lái 24h
+            Mật Độ Bẻ Lái 24h
           </div>
 
           {peakStat && (
@@ -87,12 +87,12 @@ export default function HourlyAnalyticsChart() {
               border: '1px solid rgba(255,34,68,0.4)',
               borderRadius: '12px', padding: '2px 8px', fontSize: '10px', fontWeight: 700, color: '#ff4466'
             }}>
-              🔥 Đỉnh điểm: {String(peakStat.hour).padStart(2, '0')}:00
+              Đỉnh điểm: {String(peakStat.hour).padStart(2, '0')}:00
             </div>
           )}
         </div>
 
-        {/* Metric Switcher Row (No overlap) */}
+        {/* Metric Switcher Row */}
         <div style={{ display: 'flex', gap: '4px', background: 'rgba(255,255,255,0.05)', padding: '2px', borderRadius: '6px' }}>
           <button
             onClick={() => setMetricMode('volume')}
@@ -104,7 +104,7 @@ export default function HourlyAnalyticsChart() {
               transition: 'all 0.15s'
             }}
           >
-            📊 Số chuyến
+            Số chuyến
           </button>
           <button
             onClick={() => setMetricMode('distance')}
@@ -116,88 +116,109 @@ export default function HourlyAnalyticsChart() {
               transition: 'all 0.15s'
             }}
           >
-            📏 Mức lệch (m)
+            Mức lệch (m)
           </button>
         </div>
       </div>
 
-      {/* ── 24-Hour Bar Chart Visualization ─────────────────────── */}
+      {/* ── 24-Hour Bar Chart Container (Strictly Uniform Widths) ───── */}
       <div style={{
-        display: 'flex', alignItems: 'flex-end', gap: '2px', height: '110px',
-        padding: '12px 2px 4px 2px', background: 'rgba(0,0,0,0.35)', borderRadius: '8px',
-        border: '1px solid rgba(255,255,255,0.06)', position: 'relative'
+        background: 'rgba(0,0,0,0.4)', borderRadius: '10px', padding: '12px 6px 8px 6px',
+        border: '1px solid rgba(255,255,255,0.06)'
       }}>
-        {data.map((item) => {
-          const val = metricMode === 'volume' ? (item.total_trips || 0) : (item.avg_deviation || 0);
-          const ratio = maxVal > 0 ? val / maxVal : 0;
-          const barHeightPct = Math.max(8, Math.round(ratio * 100));
-          const isPeak = item.hour === peakStat.hour;
-          const isHovered = hoveredHour === item.hour;
+        {/* Bars Container */}
+        <div style={{
+          display: 'flex', alignItems: 'flex-end', gap: '2px', height: '90px', position: 'relative'
+        }}>
+          {data.map((item) => {
+            const val = metricMode === 'volume' ? (item.total_trips || 0) : (item.avg_deviation || 0);
+            const ratio = maxVal > 0 ? val / maxVal : 0;
+            const barHeightPct = Math.max(8, Math.round(ratio * 100));
+            const isPeak = item.hour === peakStat.hour;
+            const isHovered = hoveredHour === item.hour;
 
-          // Color scale: Peak Red -> Orange -> Yellow -> Green
-          const barColor = ratio > 0.75
-            ? 'linear-gradient(180deg, #ff2244 0%, #ff6b35 100%)'
-            : ratio > 0.45
-              ? 'linear-gradient(180deg, #ff9f43 0%, #ee5253 100%)'
-              : ratio > 0.20
-                ? 'linear-gradient(180deg, #fabca1 0%, #ff9f43 100%)'
-                : 'linear-gradient(180deg, #10ac84 0%, #1dd1a1 100%)';
+            const barColor = ratio > 0.75
+              ? 'linear-gradient(180deg, #ff2244 0%, #ff6b35 100%)'
+              : ratio > 0.45
+                ? 'linear-gradient(180deg, #ff9f43 0%, #ee5253 100%)'
+                : ratio > 0.20
+                  ? 'linear-gradient(180deg, #fabca1 0%, #ff9f43 100%)'
+                  : 'linear-gradient(180deg, #10ac84 0%, #1dd1a1 100%)';
 
-          return (
-            <div
-              key={item.hour}
-              onMouseEnter={() => setHoveredHour(item.hour)}
-              onMouseLeave={() => setHoveredHour(null)}
-              style={{
-                flex: 1,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                height: '100%',
-                justifyContent: 'flex-end',
-                cursor: 'pointer',
-                position: 'relative'
-              }}
-            >
-              {/* Value indicator tooltip on hover */}
-              {isHovered && (
-                <div style={{
-                  position: 'absolute', top: '-22px', background: '#fff', color: '#111',
-                  borderRadius: '4px', padding: '1px 4px', fontSize: '9px', fontWeight: 800,
-                  whiteSpace: 'nowrap', zIndex: 10, boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
-                }}>
-                  {metricMode === 'volume' ? item.total_trips : fmtDev(item.avg_deviation)}
-                </div>
-              )}
-
-              {/* Bar */}
+            return (
               <div
+                key={item.hour}
+                onMouseEnter={() => setHoveredHour(item.hour)}
+                onMouseLeave={() => setHoveredHour(null)}
                 style={{
-                  width: '100%',
-                  height: `${barHeightPct}%`,
-                  background: barColor,
-                  borderRadius: '2px 2px 1px 1px',
-                  boxShadow: isPeak || isHovered ? '0 0 8px rgba(255,68,102,0.9)' : 'none',
-                  opacity: isHovered ? 1 : isPeak ? 0.95 : 0.75,
-                  transform: isHovered ? 'scaleY(1.06)' : 'scaleY(1)',
-                  transformOrigin: 'bottom',
-                  transition: 'all 0.15s ease'
+                  flex: '1 1 0px',
+                  minWidth: 0,
+                  width: 0,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  height: '100%',
+                  justifyContent: 'flex-end',
+                  cursor: 'pointer',
+                  position: 'relative'
                 }}
-              />
+              >
+                {/* Tooltip on hover */}
+                {isHovered && (
+                  <div style={{
+                    position: 'absolute', top: '-22px', background: '#fff', color: '#111',
+                    borderRadius: '4px', padding: '1px 4px', fontSize: '9px', fontWeight: 800,
+                    whiteSpace: 'nowrap', zIndex: 10, boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
+                  }}>
+                    {metricMode === 'volume' ? item.total_trips : fmtDev(item.avg_deviation)}
+                  </div>
+                )}
 
-              {/* Hour X-Axis Labels (every 3 hours) */}
-              <div style={{
-                fontSize: '8px',
-                color: isHovered || isPeak ? '#fff' : '#666',
-                fontWeight: isHovered || isPeak ? 800 : 400,
-                marginTop: '3px',
-                lineHeight: 1
-              }}>
+                {/* Bar */}
+                <div
+                  style={{
+                    width: '100%',
+                    height: `${barHeightPct}%`,
+                    background: barColor,
+                    borderRadius: '2px 2px 1px 1px',
+                    boxShadow: isPeak || isHovered ? '0 0 8px rgba(255,68,102,0.9)' : 'none',
+                    opacity: isHovered ? 1 : isPeak ? 0.95 : 0.75,
+                    transform: isHovered ? 'scaleY(1.06)' : 'scaleY(1)',
+                    transformOrigin: 'bottom',
+                    transition: 'all 0.15s ease'
+                  }}
+                />
+              </div>
+            );
+          })}
+        </div>
+
+        {/* X-Axis Hour Labels Row (Strictly Equal 24 Columns) */}
+        <div style={{ display: 'flex', gap: '2px', marginTop: '6px' }}>
+          {data.map((item) => {
+            const isPeak = item.hour === peakStat.hour;
+            const isHovered = hoveredHour === item.hour;
+            return (
+              <div
+                key={item.hour}
+                style={{
+                  flex: '1 1 0px',
+                  minWidth: 0,
+                  width: 0,
+                  textAlign: 'center',
+                  fontSize: '8px',
+                  color: isHovered || isPeak ? '#fff' : '#666',
+                  fontWeight: isHovered || isPeak ? 800 : 400,
+                  lineHeight: 1,
+                  overflow: 'visible',
+                  whiteSpace: 'nowrap'
+                }}
+              >
                 {item.hour % 3 === 0 ? `${item.hour}h` : ''}
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
 
       {/* ── Hovered/Peak Hour Detail Footer ─────────────────────── */}
