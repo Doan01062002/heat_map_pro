@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/heat-map-pro/backend/internal/aggregator"
+	"github.com/heat-map-pro/backend/internal/auth"
 	"github.com/heat-map-pro/backend/internal/config"
 	"github.com/heat-map-pro/backend/internal/filter"
 	"github.com/heat-map-pro/backend/internal/ingestion"
@@ -93,8 +95,22 @@ func main() {
 	// 9. Ingestion Handler (wires filter → spatial → aggregator → persister)
 	ingestHandler := ingestion.NewHandler(bboxFilter, osrmClient, h3Indexer, agg, pgAdapter, cfg)
 
+	// 10. Auth Repository & Handler
+	authRepo := auth.NewRepository(pgWriter.Pool())
+	authHandler := auth.NewHandler(authRepo)
+
 	// ---- Wire Cross-Component Dependencies ----
 	redisPub.SetDriverCounter(ingestHandler)
+
+	pgWriter.SetOnTripSaved(func(trip persistence.TripPayload) {
+		msg, err := json.Marshal(map[string]interface{}{
+			"type": "new_trip",
+			"trip": trip,
+		})
+		if err == nil {
+			_ = redisPub.PublishRaw(ctx, msg)
+		}
+	})
 
 	// ---- Start Background Workers ----
 	go redisPub.StartFlushLoop(ctx, agg, time.Duration(cfg.FlushIntervalRedisMS)*time.Millisecond)
@@ -103,6 +119,11 @@ func main() {
 
 	// ---- Setup HTTP Routes ----
 	mux := http.NewServeMux()
+
+	// Driver Authentication
+	mux.HandleFunc("POST /api/auth/register", authHandler.Register)
+	mux.HandleFunc("POST /api/auth/login", authHandler.Login)
+	mux.HandleFunc("GET /api/auth/me", authHandler.Me)
 
 	// Health check
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
@@ -114,8 +135,9 @@ func main() {
 		)
 	})
 
-	// Trip registration
-	mux.HandleFunc("POST /api/trips", ingestHandler.RegisterTrip)
+	// Trip saving & retrieval
+	mux.HandleFunc("POST /api/trips", pgWriter.HandleSaveTrip)
+	mux.HandleFunc("GET /api/trips", pgWriter.HandleGetTrips)
 
 	// Historical heatmap query
 	mux.HandleFunc("GET /api/history", pgWriter.HandleHistoryQuery)

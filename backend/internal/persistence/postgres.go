@@ -15,6 +15,7 @@ import (
 
 	"github.com/heat-map-pro/backend/internal/aggregator"
 	"github.com/heat-map-pro/backend/internal/config"
+	"github.com/heat-map-pro/backend/internal/spatial"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -38,8 +39,13 @@ type PostgresWriter struct {
 	pool *pgxpool.Pool
 
 	// Thread-safe event buffer — ingestion handler writes, flush loop reads+clears
-	mu     sync.Mutex
-	buffer []DeviationEvent
+	mu          sync.Mutex
+	buffer      []DeviationEvent
+	onTripSaved func(trip TripPayload)
+}
+
+func (w *PostgresWriter) SetOnTripSaved(fn func(trip TripPayload)) {
+	w.onTripSaved = fn
 }
 
 // NewPostgresWriter creates a new PostgreSQL writer with connection pooling.
@@ -67,6 +73,11 @@ func NewPostgresWriter(ctx context.Context, cfg *config.Config) (*PostgresWriter
 		pool:   pool,
 		buffer: make([]DeviationEvent, 0, 1024),
 	}, nil
+}
+
+// Pool returns the underlying pgxpool connection pool.
+func (w *PostgresWriter) Pool() *pgxpool.Pool {
+	return w.pool
 }
 
 // BufferEvent adds a deviation event to the write buffer.
@@ -159,25 +170,19 @@ func (w *PostgresWriter) HandleHistoryQuery(wr http.ResponseWriter, r *http.Requ
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
 
-	if fromStr == "" || toStr == "" {
-		http.Error(wr, `{"error":"from and to query parameters are required (unix milliseconds)"}`, http.StatusBadRequest)
-		return
-	}
+	fromTime := time.Unix(0, 0)
+	toTime := time.Now().Add(24 * time.Hour)
 
-	fromMS, err := strconv.ParseInt(fromStr, 10, 64)
-	if err != nil {
-		http.Error(wr, `{"error":"invalid 'from' parameter"}`, http.StatusBadRequest)
-		return
+	if fromStr != "" {
+		if fromMS, err := strconv.ParseInt(fromStr, 10, 64); err == nil {
+			fromTime = time.UnixMilli(fromMS)
+		}
 	}
-
-	toMS, err := strconv.ParseInt(toStr, 10, 64)
-	if err != nil {
-		http.Error(wr, `{"error":"invalid 'to' parameter"}`, http.StatusBadRequest)
-		return
+	if toStr != "" {
+		if toMS, err := strconv.ParseInt(toStr, 10, 64); err == nil {
+			toTime = time.UnixMilli(toMS)
+		}
 	}
-
-	fromTime := time.UnixMilli(fromMS)
-	toTime := time.UnixMilli(toMS)
 
 	rows, err := w.pool.Query(r.Context(),
 		`SELECT h3_index, intensity, last_updated, unique_drivers
@@ -218,8 +223,8 @@ func (w *PostgresWriter) HandleHistoryQuery(wr http.ResponseWriter, r *http.Requ
 	json.NewEncoder(wr).Encode(map[string]interface{}{
 		"cells": cells,
 		"query": map[string]interface{}{
-			"from": fromMS,
-			"to":   toMS,
+			"from": fromTime.UnixMilli(),
+			"to":   toTime.UnixMilli(),
 		},
 		"total_cells": len(cells),
 	})
@@ -322,20 +327,18 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 	toStr := r.URL.Query().Get("to")
 	limitStr := r.URL.Query().Get("limit")
 
-	if fromStr == "" || toStr == "" {
-		http.Error(wr, `{"error":"from and to query parameters are required (unix milliseconds)"}`, http.StatusBadRequest)
-		return
-	}
+	fromTime := time.Unix(0, 0)
+	toTime := time.Now().Add(24 * time.Hour)
 
-	fromMS, err := strconv.ParseInt(fromStr, 10, 64)
-	if err != nil {
-		http.Error(wr, `{"error":"invalid 'from' parameter"}`, http.StatusBadRequest)
-		return
+	if fromStr != "" {
+		if fromMS, err := strconv.ParseInt(fromStr, 10, 64); err == nil {
+			fromTime = time.UnixMilli(fromMS)
+		}
 	}
-	toMS, err := strconv.ParseInt(toStr, 10, 64)
-	if err != nil {
-		http.Error(wr, `{"error":"invalid 'to' parameter"}`, http.StatusBadRequest)
-		return
+	if toStr != "" {
+		if toMS, err := strconv.ParseInt(toStr, 10, 64); err == nil {
+			toTime = time.UnixMilli(toMS)
+		}
 	}
 
 	limit := 0
@@ -354,14 +357,14 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 			WHERE created_at >= $1 AND created_at <= $2
 			ORDER BY deviation_meters DESC
 			LIMIT $3
-		`, time.UnixMilli(fromMS), time.UnixMilli(toMS), limit)
+		`, fromTime, toTime, limit)
 	} else {
 		rows, queryErr = w.pool.Query(r.Context(), `
 			SELECT latitude, longitude, deviation_meters
 			FROM deviation_events
 			WHERE created_at >= $1 AND created_at <= $2
 			ORDER BY deviation_meters DESC
-		`, time.UnixMilli(fromMS), time.UnixMilli(toMS))
+		`, fromTime, toTime)
 	}
 	if queryErr != nil {
 		slog.Error("points query failed", "error", queryErr)
@@ -389,8 +392,8 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 	json.NewEncoder(wr).Encode(map[string]interface{}{
 		"points":      points,
 		"total":       len(points),
-		"from":        fromMS,
-		"to":          toMS,
+		"from":        fromTime.UnixMilli(),
+		"to":          toTime.UnixMilli(),
 	})
 }
 
@@ -401,20 +404,18 @@ func (w *PostgresWriter) HandleTrajectoriesQuery(wr http.ResponseWriter, r *http
 	toStr := r.URL.Query().Get("to")
 	limitStr := r.URL.Query().Get("limit")
 
-	if fromStr == "" || toStr == "" {
-		http.Error(wr, `{"error":"from and to query parameters are required (unix milliseconds)"}`, http.StatusBadRequest)
-		return
-	}
+	fromTime := time.Unix(0, 0)
+	toTime := time.Now().Add(24 * time.Hour)
 
-	fromMS, err := strconv.ParseInt(fromStr, 10, 64)
-	if err != nil {
-		http.Error(wr, `{"error":"invalid 'from' parameter"}`, http.StatusBadRequest)
-		return
+	if fromStr != "" {
+		if fromMS, err := strconv.ParseInt(fromStr, 10, 64); err == nil {
+			fromTime = time.UnixMilli(fromMS)
+		}
 	}
-	toMS, err := strconv.ParseInt(toStr, 10, 64)
-	if err != nil {
-		http.Error(wr, `{"error":"invalid 'to' parameter"}`, http.StatusBadRequest)
-		return
+	if toStr != "" {
+		if toMS, err := strconv.ParseInt(toStr, 10, 64); err == nil {
+			toTime = time.UnixMilli(toMS)
+		}
 	}
 
 	limit := 0
@@ -438,14 +439,14 @@ func (w *PostgresWriter) HandleTrajectoriesQuery(wr http.ResponseWriter, r *http
 			HAVING COUNT(*) >= 3
 			ORDER BY COUNT(*) DESC
 			LIMIT $3
-		`, time.UnixMilli(fromMS), time.UnixMilli(toMS), limit)
+		`, fromTime, toTime, limit)
 		if err != nil {
 			slog.Error("trajectories query failed", "error", err)
 			http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
 			return
 		}
 		defer rows.Close()
-		w.renderTrajectoriesJSON(wr, rows, fromMS, toMS)
+		w.renderTrajectoriesJSON(wr, rows, fromTime.UnixMilli(), toTime.UnixMilli())
 	} else {
 		rows, err := w.pool.Query(r.Context(), `
 			SELECT trip_id, driver_id,
@@ -458,14 +459,14 @@ func (w *PostgresWriter) HandleTrajectoriesQuery(wr http.ResponseWriter, r *http
 			GROUP BY trip_id, driver_id
 			HAVING COUNT(*) >= 3
 			ORDER BY COUNT(*) DESC
-		`, time.UnixMilli(fromMS), time.UnixMilli(toMS))
+		`, fromTime, toTime)
 		if err != nil {
 			slog.Error("trajectories query failed", "error", err)
 			http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
 			return
 		}
 		defer rows.Close()
-		w.renderTrajectoriesJSON(wr, rows, fromMS, toMS)
+		w.renderTrajectoriesJSON(wr, rows, fromTime.UnixMilli(), toTime.UnixMilli())
 	}
 }
 
@@ -618,3 +619,210 @@ func (w *PostgresWriter) HandleRoadStatsQuery(wr http.ResponseWriter, r *http.Re
 		"avoid_ratio":    avoidRatio,
 	})
 }
+
+// TripPayload defines the JSON structure for saving/retrieving trips.
+type TripPayload struct {
+	TripID          string          `json:"trip_id"`
+	DriverID        string          `json:"driver_id"`
+	DriverName      string          `json:"driver_name,omitempty"`
+	OriginJSON      json.RawMessage `json:"origin"`
+	DestinationJSON json.RawMessage `json:"destination"`
+	WaypointsJSON   json.RawMessage `json:"waypoints"`
+	ActualRouteJSON json.RawMessage `json:"actual_route"`
+	DistanceKm      float64         `json:"distance_km"`
+	DurationMin     int             `json:"duration_min"`
+	IsDeviated      bool            `json:"is_deviated"`
+	Status          string          `json:"status"`
+	CreatedAt       int64           `json:"created_at"`
+}
+
+// HandleSaveTrip handles POST /api/trips to save a trip with rich metadata.
+func (w *PostgresWriter) HandleSaveTrip(wr http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		wr.WriteHeader(http.StatusOK)
+		return
+	}
+
+	var req TripPayload
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(wr, fmt.Sprintf(`{"error":"invalid body: %s"}`, err), http.StatusBadRequest)
+		return
+	}
+
+	if req.TripID == "" || req.DriverID == "" {
+		http.Error(wr, `{"error":"trip_id and driver_id are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	if len(req.OriginJSON) == 0 {
+		req.OriginJSON = json.RawMessage("{}")
+	}
+	if len(req.DestinationJSON) == 0 {
+		req.DestinationJSON = json.RawMessage("{}")
+	}
+	if len(req.WaypointsJSON) == 0 {
+		req.WaypointsJSON = json.RawMessage("[]")
+	}
+	if len(req.ActualRouteJSON) == 0 {
+		req.ActualRouteJSON = json.RawMessage("[]")
+	}
+	if req.Status == "" {
+		req.Status = "completed"
+	}
+
+	// Fetch driver full_name if not provided
+	if req.DriverName == "" {
+		_ = w.pool.QueryRow(r.Context(), "SELECT full_name FROM drivers WHERE driver_id = $1", req.DriverID).Scan(&req.DriverName)
+		if req.DriverName == "" {
+			req.DriverName = req.DriverID
+		}
+	}
+
+	query := `
+		INSERT INTO trips (
+			trip_id, driver_id, origin_json, destination_json,
+			waypoints_json, actual_route_json, distance_km, duration_min,
+			is_deviated, status, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+		ON CONFLICT (trip_id) DO UPDATE SET
+			origin_json = EXCLUDED.origin_json,
+			destination_json = EXCLUDED.destination_json,
+			waypoints_json = EXCLUDED.waypoints_json,
+			actual_route_json = EXCLUDED.actual_route_json,
+			distance_km = EXCLUDED.distance_km,
+			duration_min = EXCLUDED.duration_min,
+			is_deviated = EXCLUDED.is_deviated,
+			status = EXCLUDED.status;
+	`
+
+	_, err := w.pool.Exec(r.Context(), query,
+		req.TripID, req.DriverID, req.OriginJSON, req.DestinationJSON,
+		req.WaypointsJSON, req.ActualRouteJSON, req.DistanceKm, req.DurationMin,
+		req.IsDeviated, req.Status,
+	)
+
+	if err != nil {
+		slog.Error("failed to save trip", "error", err)
+		http.Error(wr, `{"error":"failed to save trip"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Insert points into deviation_events with H3 spatial indexing for History Heatmap & 3D H3 Grid
+	var routeCoords [][2]float64
+	if err := json.Unmarshal(req.ActualRouteJSON, &routeCoords); err == nil && len(routeCoords) > 0 {
+		indexer := spatial.NewH3Indexer(8)
+		now := time.Now()
+
+		for idx, pt := range routeCoords {
+			lng, lat := pt[0], pt[1]
+			h3Index := indexer.LatLngToCell(lat, lng)
+
+			devMeters := 15.0
+			if req.IsDeviated {
+				devMeters = 120.0
+			}
+
+			ptTime := now.Add(time.Duration(idx) * time.Second)
+
+			_, errInst := w.pool.Exec(r.Context(), `
+				INSERT INTO deviation_events (
+					driver_id, trip_id, latitude, longitude, h3_index,
+					deviation_meters, heading, speed_kmh, created_at
+				) VALUES ($1, $2, $3, $4, $5, $6, 90, 40, $7)
+			`, req.DriverID, req.TripID, lat, lng, h3Index, devMeters, ptTime)
+
+			if errInst != nil {
+				slog.Warn("failed to insert deviation_event point", "error", errInst, "trip_id", req.TripID)
+			}
+		}
+		slog.Info("inserted trip points into deviation_events", "trip_id", req.TripID, "points", len(routeCoords))
+	}
+
+	// Fetch created_at timestamp
+	var createdAt time.Time
+	_ = w.pool.QueryRow(r.Context(), "SELECT created_at FROM trips WHERE trip_id = $1", req.TripID).Scan(&createdAt)
+	req.CreatedAt = createdAt.UnixMilli()
+
+	wr.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(wr).Encode(map[string]interface{}{
+		"status": "saved",
+		"trip":   req,
+	})
+
+	if w.onTripSaved != nil {
+		w.onTripSaved(req)
+	}
+
+	slog.Info("trip saved to database", "trip_id", req.TripID, "driver_id", req.DriverID)
+}
+
+// HandleGetTrips handles GET /api/trips?driver_id=<id>&limit=<n>
+func (w *PostgresWriter) HandleGetTrips(wr http.ResponseWriter, r *http.Request) {
+	driverID := r.URL.Query().Get("driver_id")
+	limitStr := r.URL.Query().Get("limit")
+
+	limit := 50
+	if limitStr != "" {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	var rows pgx.Rows
+	var queryErr error
+
+	if driverID != "" {
+		rows, queryErr = w.pool.Query(r.Context(), `
+			SELECT t.trip_id, t.driver_id, COALESCE(d.full_name, t.driver_id) AS driver_name,
+			       t.origin_json, t.destination_json, t.waypoints_json, t.actual_route_json,
+			       t.distance_km, t.duration_min, t.is_deviated, t.status, t.created_at
+			FROM trips t
+			LEFT JOIN drivers d ON t.driver_id = d.driver_id
+			WHERE t.driver_id = $1
+			ORDER BY t.created_at DESC
+			LIMIT $2
+		`, driverID, limit)
+	} else {
+		rows, queryErr = w.pool.Query(r.Context(), `
+			SELECT t.trip_id, t.driver_id, COALESCE(d.full_name, t.driver_id) AS driver_name,
+			       t.origin_json, t.destination_json, t.waypoints_json, t.actual_route_json,
+			       t.distance_km, t.duration_min, t.is_deviated, t.status, t.created_at
+			FROM trips t
+			LEFT JOIN drivers d ON t.driver_id = d.driver_id
+			ORDER BY t.created_at DESC
+			LIMIT $1
+		`, limit)
+	}
+
+	if queryErr != nil {
+		slog.Error("get trips query failed", "error", queryErr)
+		http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	trips := make([]TripPayload, 0, 32)
+	for rows.Next() {
+		var t TripPayload
+		var createdAt time.Time
+
+		err := rows.Scan(
+			&t.TripID, &t.DriverID, &t.DriverName,
+			&t.OriginJSON, &t.DestinationJSON, &t.WaypointsJSON, &t.ActualRouteJSON,
+			&t.DistanceKm, &t.DurationMin, &t.IsDeviated, &t.Status, &createdAt,
+		)
+		if err != nil {
+			slog.Error("scan trip failed", "error", err)
+			continue
+		}
+		t.CreatedAt = createdAt.UnixMilli()
+		trips = append(trips, t)
+	}
+
+	wr.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(wr).Encode(map[string]interface{}{
+		"trips": trips,
+		"total": len(trips),
+	})
+}
+

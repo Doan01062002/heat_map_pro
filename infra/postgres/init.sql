@@ -52,11 +52,17 @@ CREATE INDEX IF NOT EXISTS idx_deviation_events_h3_time
 CREATE TABLE IF NOT EXISTS trips (
     trip_id         VARCHAR(128)    PRIMARY KEY,
     driver_id       VARCHAR(64)     NOT NULL,
-    bbox_min_lat    DOUBLE PRECISION NOT NULL,
-    bbox_min_lng    DOUBLE PRECISION NOT NULL,
-    bbox_max_lat    DOUBLE PRECISION NOT NULL,
-    bbox_max_lng    DOUBLE PRECISION NOT NULL,
+    bbox_min_lat    DOUBLE PRECISION DEFAULT 0,
+    bbox_min_lng    DOUBLE PRECISION DEFAULT 0,
+    bbox_max_lat    DOUBLE PRECISION DEFAULT 0,
+    bbox_max_lng    DOUBLE PRECISION DEFAULT 0,
+    origin_json     JSONB           NOT NULL DEFAULT '{}'::jsonb,
+    destination_json JSONB          NOT NULL DEFAULT '{}'::jsonb,
     waypoints_json  JSONB           NOT NULL DEFAULT '[]'::jsonb,
+    actual_route_json JSONB         NOT NULL DEFAULT '[]'::jsonb,
+    distance_km     DOUBLE PRECISION DEFAULT 0,
+    duration_min    INTEGER         DEFAULT 0,
+    is_deviated     BOOLEAN         DEFAULT false,
     status          VARCHAR(20)     NOT NULL DEFAULT 'active',
     created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
     completed_at    TIMESTAMPTZ
@@ -112,3 +118,26 @@ AS $$
     GROUP BY de.h3_index
     ORDER BY intensity DESC;
 $$;
+
+-- ==============================================================================
+-- Table: drivers
+-- ==============================================================================
+-- Stores driver accounts for authentication & profile management.
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS drivers (
+    id              BIGSERIAL       PRIMARY KEY,
+    driver_id       VARCHAR(64)     UNIQUE NOT NULL,
+    email           VARCHAR(128)    UNIQUE NOT NULL,
+    password_hash   VARCHAR(255)    NOT NULL,
+    full_name       VARCHAR(128)    NOT NULL,
+    phone           VARCHAR(32),
+    license_plate   VARCHAR(32),
+    vehicle_type    VARCHAR(32)     DEFAULT 'taxi',
+    status          VARCHAR(20)     NOT NULL DEFAULT 'active',
+    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_drivers_email ON drivers(email);
+CREATE INDEX IF NOT EXISTS idx_drivers_driver_id ON drivers(driver_id);
+

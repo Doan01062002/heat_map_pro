@@ -389,7 +389,7 @@ export default function HeatmapLayer({
 
   // ── 3D H3 Hexagon Extrusion Grid Layer (~3.6m radius, Res 13) ──────────────
   useEffect(() => {
-    if (!map || !initialized.current) return;
+    if (!map) return;
 
     const sourceId = 'hm-3d-h3-src';
     const layerId  = 'hm-3d-h3-extrusion';
@@ -475,7 +475,7 @@ export default function HeatmapLayer({
 
   // ── Selected trip route overlay ───────────────────────────────────────────
   useEffect(() => {
-    if (!map || !initialized.current) return;
+    if (!map) return;
 
     // Cleanup previous trip layers
     ['trip-planned-case','trip-planned','trip-actual-case','trip-actual',
@@ -628,13 +628,22 @@ export default function HeatmapLayer({
     map.on('mouseenter', 'trip-planned', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'trip-planned', () => { map.getCanvas().style.cursor = ''; });
 
-    // Fit map to trip
+    // Fit map to trip location
     const all = [...actualCoords, ...plannedCoords];
-    const lngs = all.map(c => c[0]), lats = all.map(c => c[1]);
-    map.fitBounds(
-      [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
-      { padding: 80, duration: 1200, maxZoom: 14 }
-    );
+    if (all.length > 0) {
+      const lngs = all.map(c => c[0]), lats = all.map(c => c[1]);
+      const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
+      const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+
+      if (minLng === maxLng && minLat === maxLat) {
+        map.flyTo({ center: [minLng, minLat], zoom: 15, duration: 1200 });
+      } else {
+        map.fitBounds(
+          [[minLng, minLat], [maxLng, maxLat]],
+          { padding: 100, duration: 1200, maxZoom: 15 }
+        );
+      }
+    }
   }, [map, selectedTrip]);
 
   // ── Cleanup ───────────────────────────────────────────────────────────────
