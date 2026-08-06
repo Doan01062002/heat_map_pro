@@ -63,8 +63,8 @@ func main() {
 
 	// Concurrency worker pool
 	concurrency := 150
-	jobs := make(chan Point, 5000)
-	results := make(chan Point, 5000)
+	jobs := make(chan Point, 10000)
+	results := make(chan Point, 10000)
 	var wg sync.WaitGroup
 
 	for i := 0; i < concurrency; i++ {

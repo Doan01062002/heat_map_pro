@@ -160,8 +160,13 @@ export default function HeatmapLayer({
     const geojson = { type: 'FeatureCollection', features };
 
     if (!initialized.current) {
-      // Raw GPS source (for heatmap + click detection)
-      map.addSource('hm-points', { type: 'geojson', data: geojson });
+      // Raw GPS source (for heatmap + click detection) — optimized for 386k points
+      map.addSource('hm-points', {
+        type: 'geojson',
+        data: geojson,
+        tolerance: 2.5,
+        buffer: 0,
+      });
 
       // Snapped dots source (empty initially, filled lazily at high zoom)
       map.addSource('hm-snapped', {
@@ -196,13 +201,14 @@ export default function HeatmapLayer({
         },
       });
 
-      // ── Invisible click-detection layer over heatmap ──
+      // ── Invisible click-detection layer over heatmap (active only at zoom >= 14 for 60 FPS performance) ──
       map.addLayer({
         id: 'hm-hover',
         type: 'circle',
         source: 'hm-points',
+        minzoom: 14,
         paint: {
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 10, 12, 18, 18, 26],
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 12, 18, 26],
           'circle-color': 'transparent',
           'circle-opacity': 0,
         },
@@ -389,7 +395,12 @@ export default function HeatmapLayer({
     const layerId  = 'hm-3d-h3-extrusion';
 
     if (!map.getSource(sourceId)) {
-      map.addSource(sourceId, { type: 'geojson', data: h3GeoJSON });
+      map.addSource(sourceId, {
+        type: 'geojson',
+        data: h3GeoJSON,
+        tolerance: 1.5,
+        buffer: 0,
+      });
 
       map.addLayer({
         id: layerId,

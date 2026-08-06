@@ -15,6 +15,7 @@ import (
 
 	"github.com/heat-map-pro/backend/internal/aggregator"
 	"github.com/heat-map-pro/backend/internal/config"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -337,22 +338,33 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	limit := 50000
+	limit := 0
 	if limitStr != "" {
-		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 && n <= 200000 {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
 			limit = n
 		}
 	}
 
-	rows, err := w.pool.Query(r.Context(), `
-		SELECT latitude, longitude, deviation_meters
-		FROM deviation_events
-		WHERE created_at >= $1 AND created_at <= $2
-		ORDER BY deviation_meters DESC
-		LIMIT $3
-	`, time.UnixMilli(fromMS), time.UnixMilli(toMS), limit)
-	if err != nil {
-		slog.Error("points query failed", "error", err)
+	var rows pgx.Rows
+	var queryErr error
+	if limit > 0 {
+		rows, queryErr = w.pool.Query(r.Context(), `
+			SELECT latitude, longitude, deviation_meters
+			FROM deviation_events
+			WHERE created_at >= $1 AND created_at <= $2
+			ORDER BY deviation_meters DESC
+			LIMIT $3
+		`, time.UnixMilli(fromMS), time.UnixMilli(toMS), limit)
+	} else {
+		rows, queryErr = w.pool.Query(r.Context(), `
+			SELECT latitude, longitude, deviation_meters
+			FROM deviation_events
+			WHERE created_at >= $1 AND created_at <= $2
+			ORDER BY deviation_meters DESC
+		`, time.UnixMilli(fromMS), time.UnixMilli(toMS))
+	}
+	if queryErr != nil {
+		slog.Error("points query failed", "error", queryErr)
 		http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
 		return
 	}
@@ -405,34 +417,59 @@ func (w *PostgresWriter) HandleTrajectoriesQuery(wr http.ResponseWriter, r *http
 		return
 	}
 
-	limit := 500
+	limit := 0
 	if limitStr != "" {
-		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 && n <= 2000 {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
 			limit = n
 		}
 	}
 
 	// Fetch top N trips by point count, ordered by time
-	rows, err := w.pool.Query(r.Context(), `
-		SELECT trip_id, driver_id,
-		       array_agg(longitude ORDER BY created_at) AS lngs,
-		       array_agg(latitude  ORDER BY created_at) AS lats,
-		       AVG(deviation_meters)::FLOAT8            AS avg_deviation,
-		       COUNT(*)::INT                            AS point_count
-		FROM deviation_events
-		WHERE created_at >= $1 AND created_at <= $2
-		GROUP BY trip_id, driver_id
-		HAVING COUNT(*) >= 3
-		ORDER BY COUNT(*) DESC
-		LIMIT $3
-	`, time.UnixMilli(fromMS), time.UnixMilli(toMS), limit)
-	if err != nil {
-		slog.Error("trajectories query failed", "error", err)
-		http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
-		return
+	if limit > 0 {
+		rows, err := w.pool.Query(r.Context(), `
+			SELECT trip_id, driver_id,
+			       array_agg(longitude ORDER BY created_at) AS lngs,
+			       array_agg(latitude  ORDER BY created_at) AS lats,
+			       AVG(deviation_meters)::FLOAT8            AS avg_deviation,
+			       COUNT(*)::INT                            AS point_count
+			FROM deviation_events
+			WHERE created_at >= $1 AND created_at <= $2
+			GROUP BY trip_id, driver_id
+			HAVING COUNT(*) >= 3
+			ORDER BY COUNT(*) DESC
+			LIMIT $3
+		`, time.UnixMilli(fromMS), time.UnixMilli(toMS), limit)
+		if err != nil {
+			slog.Error("trajectories query failed", "error", err)
+			http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+		w.renderTrajectoriesJSON(wr, rows, fromMS, toMS)
+	} else {
+		rows, err := w.pool.Query(r.Context(), `
+			SELECT trip_id, driver_id,
+			       array_agg(longitude ORDER BY created_at) AS lngs,
+			       array_agg(latitude  ORDER BY created_at) AS lats,
+			       AVG(deviation_meters)::FLOAT8            AS avg_deviation,
+			       COUNT(*)::INT                            AS point_count
+			FROM deviation_events
+			WHERE created_at >= $1 AND created_at <= $2
+			GROUP BY trip_id, driver_id
+			HAVING COUNT(*) >= 3
+			ORDER BY COUNT(*) DESC
+		`, time.UnixMilli(fromMS), time.UnixMilli(toMS))
+		if err != nil {
+			slog.Error("trajectories query failed", "error", err)
+			http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+		w.renderTrajectoriesJSON(wr, rows, fromMS, toMS)
 	}
-	defer rows.Close()
+}
 
+func (w *PostgresWriter) renderTrajectoriesJSON(wr http.ResponseWriter, rows pgx.Rows, fromMS, toMS int64) {
 	type Feature struct {
 		Type     string                 `json:"type"`
 		Geometry map[string]interface{} `json:"geometry"`
