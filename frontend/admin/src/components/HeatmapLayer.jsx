@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useMemo } from 'react';
+import { latLngToCell, cellToBoundary } from 'h3-js';
 import { snapPointsBatch } from '../utils/osrmRouting';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
@@ -118,19 +119,29 @@ async function showRoadStatsPopup(map, popupLngLat, queryLat, queryLng, hintDev)
 
 /**
  * HeatmapLayer:
- * 1. Smooth heatmap gradient (always visible, all zooms)
- * 2. At zoom ≥ 14: individual GPS dots SNAPPED to the nearest road
- *    via OSRM /nearest API — dots appear on road centerlines, not off-road
- * 3. Click anywhere on map → Vietnamese stats popup via /api/road-stats
- * 4. Selected trip: planned route (blue dashed) + actual GPS route (orange)
- *
- * NO trajectory line layers — only dots and heatmap.
+ * 1. Smooth 2D heatmap gradient (toggleable)
+ * 2. 3D H3 Hexagon Extrusion Grid (Res 12, radius < 10m, monochrome green scale, height ~ turn count)
+ * 3. At zoom ≥ 14: individual GPS dots SNAPPED to the nearest road via OSRM
+ * 4. Click anywhere on map → Vietnamese stats popup via /api/road-stats
+ * 5. Selected trip: planned route (blue dashed) + actual GPS route (orange)
  */
-export default function HeatmapLayer({ map, points = [], selectedTrip = null }) {
+export default function HeatmapLayer({
+  map,
+  points = [],
+  selectedTrip = null,
+  showHeatmap = true,
+  show3DH3Grid = true,
+}) {
   const initialized   = useRef(false);
   const clickHandler  = useRef(null);
   const snapCache     = useRef(new Map()); // key: "lng,lat" → snapped [lng,lat]
   const snapPending   = useRef(false);
+  const show3DH3Ref   = useRef(show3DH3Grid);
+
+  // Keep show3DH3Ref in sync
+  useEffect(() => {
+    show3DH3Ref.current = show3DH3Grid;
+  }, [show3DH3Grid]);
 
   // ── Heatmap + dot layers + click handler ──────────────────────────────────
   useEffect(() => {
@@ -270,12 +281,12 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
 
       // ── Click on snapped dot → show road stats popup (uses original GPS coords) ──
       map.on('click', 'hm-snapped-dots', async (e) => {
-        e.originalEvent.stopPropagation(); // prevent general map click from also firing
+        if (show3DH3Ref.current) return; // Suppress general popups in 3D H3 mode
+        e.originalEvent.stopPropagation();
         if (!e.features?.length) return;
 
         const f   = e.features[0];
         const dev = f.properties.deviation;
-        // Use original GPS coordinates for DB query (they match deviation_events table)
         const lat = f.properties.orig_lat ?? e.lngLat.lat;
         const lng = f.properties.orig_lng ?? e.lngLat.lng;
 
@@ -284,6 +295,9 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
 
       // ── General map click → Vietnamese road stats (areas without dots) ──
       const onMapClick = async (e) => {
+        // Do NOT show general road-stats modal when 3D H3 grid is active
+        if (show3DH3Ref.current) return;
+
         // Skip trip route layers
         for (const layer of ['trip-actual', 'trip-planned']) {
           if (map.getLayer(layer) && map.queryRenderedFeatures(e.point, { layers: [layer] }).length > 0) return;
@@ -299,8 +313,6 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
       clickHandler.current = onMapClick;
       map.on('click', onMapClick);
 
-      map.on('mouseenter', 'hm-hover',        () => { map.getCanvas().style.cursor = 'crosshair'; });
-      map.on('mouseleave', 'hm-hover',        () => { map.getCanvas().style.cursor = ''; });
       map.on('mouseenter', 'hm-snapped-dots', () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', 'hm-snapped-dots', () => { map.getCanvas().style.cursor = ''; });
 
@@ -310,6 +322,145 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
       if (src) src.setData(geojson);
     }
   }, [map, points]);
+
+  // ── Toggle Heatmap & snapped-dots visibility ──────────────────────────────
+  useEffect(() => {
+    if (!map || !initialized.current) return;
+    if (map.getLayer('hm-heat')) {
+      map.setLayoutProperty('hm-heat', 'visibility', showHeatmap ? 'visible' : 'none');
+    }
+    if (map.getLayer('hm-snapped-dots')) {
+      map.setLayoutProperty('hm-snapped-dots', 'visibility', (!show3DH3Grid && showHeatmap) ? 'visible' : 'none');
+    }
+  }, [map, showHeatmap, show3DH3Grid]);
+
+  // ── Pre-compute 3D H3 Hexagon GeoJSON statically (Ultra-fast 60 FPS) ───────
+  const h3GeoJSON = useMemo(() => {
+    if (!points || points.length === 0) return { type: 'FeatureCollection', features: [] };
+
+    const h3CellMap = new Map();
+    let maxCount = 1;
+
+    for (let i = 0; i < points.length; i++) {
+      const pt = points[i];
+      if (!pt.lat || !pt.lng) continue;
+
+      const cell = latLngToCell(pt.lat, pt.lng, 13);
+      const item = h3CellMap.get(cell);
+      if (!item) {
+        h3CellMap.set(cell, { cell, count: 1, totalDev: pt.deviation || 0, maxDev: pt.deviation || 0 });
+      } else {
+        item.count++;
+        if (item.count > maxCount) maxCount = item.count;
+        item.totalDev += (pt.deviation || 0);
+        item.maxDev = Math.max(item.maxDev, pt.deviation || 0);
+      }
+    }
+
+    const features = [];
+    for (const item of h3CellMap.values()) {
+      try {
+        const boundary = cellToBoundary(item.cell, true);
+        if (!boundary || boundary.length === 0) continue;
+        const ratio = item.count / maxCount; // Relative percentage from 0.0 to 1.0 (percentile scale)
+        features.push({
+          type: 'Feature',
+          geometry: { type: 'Polygon', coordinates: [boundary] },
+          properties: {
+            h3Index: item.cell,
+            count: item.count,
+            ratio: ratio,
+            height: Math.max(4, Math.round(ratio * 120)), // Relative height (4m to 120m)
+            avgDev: Math.round(item.totalDev / item.count),
+            maxDev: Math.round(item.maxDev),
+          },
+        });
+      } catch (_) {}
+    }
+
+    return { type: 'FeatureCollection', features };
+  }, [points]);
+
+  // ── 3D H3 Hexagon Extrusion Grid Layer (~3.6m radius, Res 13) ──────────────
+  useEffect(() => {
+    if (!map || !initialized.current) return;
+
+    const sourceId = 'hm-3d-h3-src';
+    const layerId  = 'hm-3d-h3-extrusion';
+
+    if (!map.getSource(sourceId)) {
+      map.addSource(sourceId, { type: 'geojson', data: h3GeoJSON });
+
+      map.addLayer({
+        id: layerId,
+        type: 'fill-extrusion',
+        source: sourceId,
+        layout: { visibility: show3DH3Grid ? 'visible' : 'none' },
+        paint: {
+          'fill-extrusion-color': [
+            'interpolate', ['linear'], ['get', 'ratio'],
+            0.0,  '#E8F5E9',   // Very light mint green (minimum density)
+            0.2,  '#A5D6A7',   // Light green (20% of peak density)
+            0.4,  '#66BB6A',   // Vibrant green (40% of peak density)
+            0.6,  '#388E3C',   // Deep green (60% of peak density)
+            0.8,  '#1B5E20',   // Forest green (80% of peak density)
+            1.0,  '#052907',   // Darkest emerald green (Hotspot peak - 100%)
+          ],
+          'fill-extrusion-height': ['get', 'height'],
+          'fill-extrusion-base': 0,
+          'fill-extrusion-opacity': 0.88,
+        },
+      });
+
+      // Click on 3D H3 column → Show Popup
+      map.on('click', layerId, (e) => {
+        e.originalEvent.stopPropagation();
+        if (!e.features?.length) return;
+        const f = e.features[0].properties;
+        const PopupClass = map._maplibregl?.Popup || window.maplibregl?.Popup;
+        new PopupClass({ offset: 12, maxWidth: '280px', closeButton: true })
+          .setLngLat(e.lngLat)
+          .setHTML(`
+            <div style="font-family:Inter,system-ui,sans-serif;font-size:12.5px;color:#111;line-height:1.7">
+              <div style="font-weight:800;font-size:13.5px;color:#1b5e20;margin-bottom:6px">
+                Ô 3D H3 Res 13 (Bán kính ~3.6m)
+              </div>
+              <div style="font-size:11px;color:#666;margin-bottom:8px">Mã Cell: <code style="background:#e8f5e9;padding:2px 4px;border-radius:4px;color:#2e7d32">${f.h3Index}</code></div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;background:#f9f9f9;padding:8px;border-radius:6px">
+                <div>
+                  <div style="color:#666;font-size:10px;text-transform:uppercase">LƯỢT BẺ LÁI</div>
+                  <div style="font-weight:800;font-size:16px;color:#2e7d32">${f.count} <span style="font-size:11px;font-weight:600;color:#666">(${Math.round((f.ratio || 0) * 100)}%)</span></div>
+                </div>
+                <div>
+                  <div style="color:#666;font-size:10px;text-transform:uppercase">ĐỘ CAO 3D</div>
+                  <div style="font-weight:800;font-size:16px;color:#1565c0">${f.height}m</div>
+                </div>
+              </div>
+              <div style="border-top:1px solid #eee;padding-top:6px;font-size:11px;color:#555">
+                Độ lệch TB: <b>${f.avgDev >= 1000 ? (f.avgDev/1000).toFixed(1)+'km' : f.avgDev+'m'}</b> · Tối đa: <b>${f.maxDev >= 1000 ? (f.maxDev/1000).toFixed(1)+'km' : f.maxDev+'m'}</b>
+              </div>
+            </div>
+          `)
+          .addTo(map);
+      });
+
+      map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
+      map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = ''; });
+    } else {
+      const src = map.getSource(sourceId);
+      if (src) src.setData(h3GeoJSON);
+    }
+
+    // Toggle visibility and tilt camera for 3D perspective
+    if (map.getLayer(layerId)) {
+      map.setLayoutProperty(layerId, 'visibility', show3DH3Grid ? 'visible' : 'none');
+      if (show3DH3Grid) {
+        map.easeTo({ pitch: 48, bearing: -18, duration: 1000 });
+      } else {
+        map.easeTo({ pitch: 0, bearing: 0, duration: 800 });
+      }
+    }
+  }, [map, h3GeoJSON, show3DH3Grid]);
 
   // ── Selected trip route overlay ───────────────────────────────────────────
   useEffect(() => {
@@ -368,35 +519,29 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
     }
     if (cur && cur.length >= 2) overlapSegments.push(cur);
 
+    // Build GeoJSONs
+    const actualGeoJSON = {
+      type: 'FeatureCollection',
+      features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: actualCoords } }],
+    };
+    const plannedGeoJSON = {
+      type: 'FeatureCollection',
+      features: [{ type: 'Feature', geometry: { type: 'LineString', coordinates: plannedCoords } }],
+    };
     const overlapGeoJSON = {
       type: 'FeatureCollection',
-      features: overlapSegments.map(seg => ({
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: seg },
-        properties: {},
-      })),
+      features: overlapSegments.map(seg => ({ type: 'Feature', geometry: { type: 'LineString', coordinates: seg } })),
     };
-
-    // ── Start / End markers ───────────────────────────────────────────────────
-    const startPt = actualCoords[0];
-    const endPt   = actualCoords[actualCoords.length - 1];
     const markersGeoJSON = {
       type: 'FeatureCollection',
       features: [
-        { type: 'Feature', geometry: { type: 'Point', coordinates: startPt }, properties: { role: 'start' } },
-        { type: 'Feature', geometry: { type: 'Point', coordinates: endPt   }, properties: { role: 'end'   } },
+        { type: 'Feature', geometry: { type: 'Point', coordinates: actualCoords[0] }, properties: { role: 'start' } },
+        { type: 'Feature', geometry: { type: 'Point', coordinates: actualCoords[actualCoords.length - 1] }, properties: { role: 'end' } },
       ],
     };
 
-    // ── Add sources ───────────────────────────────────────────────────────────
-    map.addSource('trip-planned-src', {
-      type: 'geojson',
-      data: { type: 'Feature', geometry: { type: 'LineString', coordinates: plannedCoords }, properties: {} },
-    });
-    map.addSource('trip-actual-src', {
-      type: 'geojson',
-      data: { type: 'Feature', geometry: { type: 'LineString', coordinates: actualCoords }, properties: {} },
-    });
+    map.addSource('trip-actual-src', { type: 'geojson', data: actualGeoJSON });
+    map.addSource('trip-planned-src', { type: 'geojson', data: plannedGeoJSON });
     map.addSource('trip-overlap-src', { type: 'geojson', data: overlapGeoJSON });
     map.addSource('trip-markers-src', { type: 'geojson', data: markersGeoJSON });
     map.addSource('trip-pts-src', {
@@ -486,11 +631,11 @@ export default function HeatmapLayer({ map, points = [], selectedTrip = null }) 
     return () => {
       if (!map || !initialized.current) return;
       if (clickHandler.current) map.off('click', clickHandler.current);
-      ['hm-heat','hm-hover','hm-snapped-dots',
+      ['hm-heat','hm-hover','hm-snapped-dots','hm-3d-h3-extrusion',
         'trip-planned-case','trip-planned','trip-actual-case','trip-actual',
         'trip-overlap-case','trip-overlap','trip-pts','trip-markers',
       ].forEach(id => { try { if (map.getLayer(id)) map.removeLayer(id); } catch (_) {} });
-      ['hm-points','hm-snapped',
+      ['hm-points','hm-snapped','hm-3d-h3-src',
         'trip-planned-src','trip-actual-src','trip-overlap-src',
         'trip-pts-src','trip-markers-src',
       ].forEach(id => { try { if (map.getSource(id)) map.removeSource(id); } catch (_) {} });
