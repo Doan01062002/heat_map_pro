@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import DriverList from './DriverList';
+import HourlyAnalyticsChart from './HourlyAnalyticsChart';
 
 /**
- * FilterPanel — Sidebar with mode toggle, date filter, and driver list.
+ * FilterPanel — Sidebar with mode toggle, date filter, driver list, and hourly analytics.
  */
 export default function FilterPanel({
   mode, onModeChange,
@@ -13,7 +14,7 @@ export default function FilterPanel({
 }) {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
-  const [activeTab, setActiveTab] = useState('map'); // 'map' | 'trips'
+  const [activeTab, setActiveTab] = useState('map'); // 'map' | 'trips' | 'analytics'
 
   const isConnected = connectionStatus === 'connected';
 
@@ -116,11 +117,11 @@ export default function FilterPanel({
         </div>
       )}
 
-      {/* ── Tab switcher: Map controls vs Trip list ────────────── */}
+      {/* ── Tab switcher: Map controls vs Trip list vs Hourly Analytics ────────────── */}
       <div style={{
         display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0,
       }}>
-        {[['map', 'Map'], ['trips', 'Trips']].map(([tab, label]) => (
+        {[['map', 'Map'], ['trips', 'Trips'], ['analytics', 'Biểu đồ']].map(([tab, label]) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -185,6 +186,12 @@ export default function FilterPanel({
           onSelectTrip={onSelectTrip}
           loading={historyLoading}
         />
+      )}
+
+      {activeTab === 'analytics' && (
+        <div style={{ padding: '8px', overflowY: 'auto', flex: 1 }}>
+          <HourlyAnalyticsChart />
+        </div>
       )}
 
       {/* Footer */}

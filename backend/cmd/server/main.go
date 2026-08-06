@@ -154,6 +154,9 @@ func main() {
 	// Road segment statistics for map click popup (Vietnamese stats)
 	mux.HandleFunc("GET /api/road-stats", pgWriter.HandleRoadStatsQuery)
 
+	// Hourly avoidance statistics for 24-hour chart
+	mux.HandleFunc("GET /api/hourly-stats", pgWriter.HandleHourlyStatsQuery)
+
 	// WebSocket: Driver GPS ingestion
 	mux.HandleFunc("/ws/driver", ingestHandler.HandleWebSocket)
 

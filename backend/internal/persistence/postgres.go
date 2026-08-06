@@ -528,57 +528,94 @@ func (w *PostgresWriter) renderTrajectoriesJSON(wr http.ResponseWriter, rows pgx
 // HandleRoadStatsQuery returns aggregated statistics for GPS events near a map click point.
 // Query params: lat, lng (required), radius (meters, default 120, max 400).
 // Used for the "click on road segment → show Vietnamese stats popup" feature.
+// Supports both Bounding Box matching (min_lat/max_lat/min_lng/max_lng) for exact H3 Hexagon polygons
+// and Haversine radial distance matching (lat/lng/radius).
 func (w *PostgresWriter) HandleRoadStatsQuery(wr http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		wr.WriteHeader(http.StatusOK)
 		return
 	}
 
-	latStr := r.URL.Query().Get("lat")
-	lngStr := r.URL.Query().Get("lng")
-	radiusStr := r.URL.Query().Get("radius")
-
-	lat, err := strconv.ParseFloat(latStr, 64)
-	if err != nil {
-		http.Error(wr, "invalid lat", http.StatusBadRequest)
-		return
-	}
-	lng, err := strconv.ParseFloat(lngStr, 64)
-	if err != nil {
-		http.Error(wr, "invalid lng", http.StatusBadRequest)
-		return
-	}
-	radius := 120.0
-	if radiusStr != "" {
-		if v, err := strconv.ParseFloat(radiusStr, 64); err == nil && v > 0 && v <= 400 {
-			radius = v
-		}
-	}
-
-	// Haversine distance in metres (pure SQL, no PostGIS required)
-	const query = `
-		SELECT
-			COUNT(*)                                                               AS total_events,
-			COUNT(DISTINCT trip_id)                                                AS unique_trips,
-			COUNT(DISTINCT driver_id)                                              AS unique_drivers,
-			COALESCE(ROUND(AVG(deviation_meters)::NUMERIC, 1), 0)::FLOAT8         AS avg_deviation,
-			COALESCE(ROUND(MAX(deviation_meters)::NUMERIC, 1), 0)::FLOAT8         AS max_deviation,
-			COUNT(CASE WHEN deviation_meters > 50  THEN 1 END)                    AS high_dev_events,
-			COUNT(DISTINCT CASE WHEN deviation_meters > 50  THEN trip_id END)     AS high_dev_trips
-		FROM deviation_events
-		WHERE (
-			6371000.0 * acos(GREATEST(-1.0, LEAST(1.0,
-				cos(radians($1)) * cos(radians(latitude))  *
-				cos(radians(longitude) - radians($2)) +
-				sin(radians($1)) * sin(radians(latitude))
-			)))
-		) <= $3
-	`
-
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
 
-	row := w.pool.QueryRow(ctx, query, lat, lng, radius)
+	minLatStr := r.URL.Query().Get("min_lat")
+	maxLatStr := r.URL.Query().Get("max_lat")
+	minLngStr := r.URL.Query().Get("min_lng")
+	maxLngStr := r.URL.Query().Get("max_lng")
+
+	var row pgx.Row
+	var queryLat, queryLng float64
+
+	if minLatStr != "" && maxLatStr != "" && minLngStr != "" && maxLngStr != "" {
+		minLat, _ := strconv.ParseFloat(minLatStr, 64)
+		maxLat, _ := strconv.ParseFloat(maxLatStr, 64)
+		minLng, _ := strconv.ParseFloat(minLngStr, 64)
+		maxLng, _ := strconv.ParseFloat(maxLngStr, 64)
+
+		queryLat = (minLat + maxLat) / 2.0
+		queryLng = (minLng + maxLng) / 2.0
+
+		const bboxQuery = `
+			SELECT
+				COUNT(*)                                                               AS total_events,
+				COUNT(DISTINCT trip_id)                                                AS unique_trips,
+				COUNT(DISTINCT driver_id)                                              AS unique_drivers,
+				COALESCE(ROUND(AVG(deviation_meters)::NUMERIC, 1), 0)::FLOAT8         AS avg_deviation,
+				COALESCE(ROUND(MAX(deviation_meters)::NUMERIC, 1), 0)::FLOAT8         AS max_deviation,
+				COUNT(CASE WHEN deviation_meters > 150 THEN 1 END)                    AS high_dev_events,
+				COUNT(DISTINCT CASE WHEN deviation_meters > 150 THEN trip_id END)     AS high_dev_trips,
+				COUNT(DISTINCT CASE WHEN deviation_meters <= 150 THEN trip_id END)    AS normal_trips
+			FROM deviation_events
+			WHERE latitude BETWEEN $1 AND $2 AND longitude BETWEEN $3 AND $4
+		`
+		row = w.pool.QueryRow(ctx, bboxQuery, minLat, maxLat, minLng, maxLng)
+	} else {
+		latStr := r.URL.Query().Get("lat")
+		lngStr := r.URL.Query().Get("lng")
+		radiusStr := r.URL.Query().Get("radius")
+
+		lat, err := strconv.ParseFloat(latStr, 64)
+		if err != nil {
+			http.Error(wr, "invalid lat", http.StatusBadRequest)
+			return
+		}
+		lng, err := strconv.ParseFloat(lngStr, 64)
+		if err != nil {
+			http.Error(wr, "invalid lng", http.StatusBadRequest)
+			return
+		}
+		queryLat = lat
+		queryLng = lng
+
+		radius := 120.0
+		if radiusStr != "" {
+			if v, err := strconv.ParseFloat(radiusStr, 64); err == nil && v > 0 && v <= 400 {
+				radius = v
+			}
+		}
+
+		const query = `
+			SELECT
+				COUNT(*)                                                               AS total_events,
+				COUNT(DISTINCT trip_id)                                                AS unique_trips,
+				COUNT(DISTINCT driver_id)                                              AS unique_drivers,
+				COALESCE(ROUND(AVG(deviation_meters)::NUMERIC, 1), 0)::FLOAT8         AS avg_deviation,
+				COALESCE(ROUND(MAX(deviation_meters)::NUMERIC, 1), 0)::FLOAT8         AS max_deviation,
+				COUNT(CASE WHEN deviation_meters > 150 THEN 1 END)                    AS high_dev_events,
+				COUNT(DISTINCT CASE WHEN deviation_meters > 150 THEN trip_id END)     AS high_dev_trips,
+				COUNT(DISTINCT CASE WHEN deviation_meters <= 150 THEN trip_id END)    AS normal_trips
+			FROM deviation_events
+			WHERE (
+				6371000.0 * acos(GREATEST(-1.0, LEAST(1.0,
+					cos(radians($1)) * cos(radians(latitude))  *
+					cos(radians(longitude) - radians($2)) +
+					sin(radians($1)) * sin(radians(latitude))
+				)))
+			) <= $3
+		`
+		row = w.pool.QueryRow(ctx, query, lat, lng, radius)
+	}
 
 	var (
 		totalEvents   int64
@@ -588,26 +625,26 @@ func (w *PostgresWriter) HandleRoadStatsQuery(wr http.ResponseWriter, r *http.Re
 		maxDeviation  float64
 		highDevEvents int64
 		highDevTrips  int64
+		normalTrips   int64
 	)
 
 	if err := row.Scan(&totalEvents, &uniqueTrips, &uniqueDrivers,
-		&avgDeviation, &maxDeviation, &highDevEvents, &highDevTrips); err != nil {
+		&avgDeviation, &maxDeviation, &highDevEvents, &highDevTrips, &normalTrips); err != nil {
 		slog.Error("road-stats query failed", "err", err)
 		http.Error(wr, "query error", http.StatusInternalServerError)
 		return
 	}
 
-	normalTrips := uniqueTrips - highDevTrips
 	var avoidRatio float64
 	if uniqueTrips > 0 {
 		avoidRatio = float64(highDevTrips) / float64(uniqueTrips) * 100
+		avoidRatio = float64(int(avoidRatio*10)) / 10.0
 	}
 
 	wr.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(wr).Encode(map[string]interface{}{
-		"lat":            lat,
-		"lng":            lng,
-		"radius_m":       radius,
+		"lat":            queryLat,
+		"lng":            queryLng,
 		"total_events":   totalEvents,
 		"unique_trips":   uniqueTrips,
 		"unique_drivers": uniqueDrivers,
@@ -823,6 +860,90 @@ func (w *PostgresWriter) HandleGetTrips(wr http.ResponseWriter, r *http.Request)
 	json.NewEncoder(wr).Encode(map[string]interface{}{
 		"trips": trips,
 		"total": len(trips),
+	})
+}
+
+// HourlyStat represents aggregated avoidance statistics for a single hour of the day (0-23).
+type HourlyStat struct {
+	Hour         int     `json:"hour"`
+	TotalPoints  int64   `json:"total_points"`
+	TotalTrips   int64   `json:"total_trips"`
+	HighDevTrips int64   `json:"high_dev_trips"`
+	AvoidRatio   float64 `json:"avoid_ratio"`
+	AvgDeviation float64 `json:"avg_deviation"`
+	MaxDeviation float64 `json:"max_deviation"`
+}
+
+// HandleHourlyStatsQuery handles GET /api/hourly-stats
+// Returns aggregated avoidance and trip stats grouped by hour of day (0 to 23).
+func (w *PostgresWriter) HandleHourlyStatsQuery(wr http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		wr.WriteHeader(http.StatusOK)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	const query = `
+		SELECT
+			EXTRACT(HOUR FROM created_at)::INT AS hr,
+			COUNT(*)                                                           AS total_points,
+			COUNT(DISTINCT trip_id)                                            AS total_trips,
+			COUNT(DISTINCT CASE WHEN deviation_meters > 50 THEN trip_id END)  AS high_dev_trips,
+			COALESCE(ROUND(AVG(deviation_meters)::NUMERIC, 1), 0)::FLOAT8      AS avg_deviation,
+			COALESCE(ROUND(MAX(deviation_meters)::NUMERIC, 1), 0)::FLOAT8      AS max_deviation
+		FROM deviation_events
+		GROUP BY EXTRACT(HOUR FROM created_at)
+		ORDER BY hr ASC
+	`
+
+	rows, err := w.pool.Query(ctx, query)
+	if err != nil {
+		slog.Error("hourly-stats query failed", "err", err)
+		http.Error(wr, `{"error":"query failed"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	hourlyMap := make(map[int]HourlyStat)
+	for h := 0; h < 24; h++ {
+		hourlyMap[h] = HourlyStat{Hour: h}
+	}
+
+	var grandTotalPoints int64 = 0
+
+	for rows.Next() {
+		var hr int
+		var pts, trips, highDev int64
+		var avgDev, maxDev float64
+		if err := rows.Scan(&hr, &pts, &trips, &highDev, &avgDev, &maxDev); err == nil {
+			grandTotalPoints += pts
+			ratio := 0.0
+			if trips > 0 {
+				ratio = float64(highDev) * 100.0 / float64(trips)
+			}
+			hourlyMap[hr] = HourlyStat{
+				Hour:         hr,
+				TotalPoints:  pts,
+				TotalTrips:   trips,
+				HighDevTrips: highDev,
+				AvoidRatio:   float64(int(ratio*10)) / 10.0,
+				AvgDeviation: avgDev,
+				MaxDeviation: maxDev,
+			}
+		}
+	}
+
+	statsList := make([]HourlyStat, 24)
+	for h := 0; h < 24; h++ {
+		statsList[h] = hourlyMap[h]
+	}
+
+	wr.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(wr).Encode(map[string]interface{}{
+		"hourly_stats": statsList,
+		"grand_total":  grandTotalPoints,
 	})
 }
 

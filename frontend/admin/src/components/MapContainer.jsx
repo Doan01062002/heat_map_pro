@@ -106,7 +106,7 @@ export default function MapContainer({ points = [], selectedTrip = null }) {
             transition: 'all 0.25s ease',
           }}
         >
-          Lưới 3D H3 (~3.6m) <span style={{ opacity: 0.8, fontSize: '10px' }}>{show3DH3Grid ? 'ON' : 'OFF'}</span>
+          Lưới 3D H3 (~3m) <span style={{ opacity: 0.8, fontSize: '10px' }}>{show3DH3Grid ? 'ON' : 'OFF'}</span>
         </button>
 
         <button
