@@ -118,6 +118,146 @@ async function showRoadStatsPopup(map, popupLngLat, queryLat, queryLng, hintDev)
 }
 
 /**
+ * show3DH3CellPopup — renders a rich actionable Vietnamese popup for a 3D H3 Hexagon cell.
+ */
+async function show3DH3CellPopup(map, popupLngLat, cellProps) {
+  const PopupClass = map._maplibregl?.Popup || window.maplibregl?.Popup;
+  const f = cellProps;
+
+  // Compute exact Geographic Bounding Box [minLat, maxLat, minLng, maxLng] of the H3 Hexagon cell
+  let minLat = 0, maxLat = 0, minLng = 0, maxLng = 0;
+  let centerLat = popupLngLat?.lat || 0;
+  let centerLng = popupLngLat?.lng || 0;
+
+  try {
+    if (f && f.h3Index) {
+      const boundary = cellToBoundary(f.h3Index, true); // [[lng, lat], ...]
+      if (Array.isArray(boundary) && boundary.length > 0) {
+        const lats = boundary.map(p => p[1]);
+        const lngs = boundary.map(p => p[0]);
+        minLat = Math.min(...lats);
+        maxLat = Math.max(...lats);
+        minLng = Math.min(...lngs);
+        maxLng = Math.max(...lngs);
+        centerLat = (minLat + maxLat) / 2.0;
+        centerLng = (minLng + maxLng) / 2.0;
+      }
+    }
+  } catch (err) {
+    console.warn('[show3DH3CellPopup] cellToBoundary failed for', f?.h3Index, err);
+  }
+
+  const loading = new PopupClass({ offset: 12, maxWidth: '300px' })
+    .setLngLat(popupLngLat)
+    .setHTML(`
+      <div style="font-family:Inter,sans-serif;color:#333;font-size:13px;line-height:1.6;padding:2px">
+        <div style="font-weight:700;margin-bottom:4px;color:#1b5e20">📊 Đang phân tích ô 3D H3…</div>
+        <div style="color:#666;font-size:11px">Mã Cell: <code style="background:#e8f5e9;padding:2px 4px;border-radius:4px;color:#2e7d32">${f.h3Index}</code></div>
+      </div>
+    `)
+    .addTo(map);
+
+  try {
+    // Query exact H3 Polygon Bounding Box from PostgreSQL backend
+    let url = `${API_URL}/api/road-stats`;
+    if (minLat > 0 && maxLat > 0) {
+      url += `?min_lat=${minLat}&max_lat=${maxLat}&min_lng=${minLng}&max_lng=${maxLng}`;
+    } else {
+      const cellRadius = f.res === 14 ? 4 : f.res === 13 ? 10 : 25;
+      url += `?lat=${centerLat}&lng=${centerLng}&radius=${cellRadius}`;
+    }
+
+    const res = await fetch(url);
+    let dbStats = null;
+    if (res.ok) {
+      dbStats = await res.json();
+    }
+    loading.remove();
+
+    const fmtDev = v => v >= 1000 ? `${(v/1000).toFixed(1)} km` : `${Math.round(v)} m`;
+
+    const totalTrips   = dbStats?.unique_trips ?? 0;
+    const drivers      = dbStats?.unique_drivers ?? 0;
+    const avoidRatio   = dbStats?.avoid_ratio ?? 0;
+    const normalTrips  = dbStats?.normal_trips ?? 0;
+    const highDevTrips = dbStats?.high_dev_trips ?? 0;
+    const avgDev       = dbStats?.avg_deviation ?? f.avgDev ?? 0;
+    const maxDev       = dbStats?.max_deviation ?? f.maxDev ?? 0;
+
+    const riskLabel = avoidRatio > 50 ? '🔴 Rủi ro Bẻ lái Cao' : avoidRatio > 20 ? '🟡 Cảnh báo Né tránh' : '🟢 An toàn (Đúng tuyến)';
+    const riskBg    = avoidRatio > 50 ? '#ffebee' : avoidRatio > 20 ? '#fff8e1' : '#e8f5e9';
+    const riskColor = avoidRatio > 50 ? '#c62828' : avoidRatio > 20 ? '#f57f17' : '#2e7d32';
+
+    new PopupClass({ offset: 12, maxWidth: '315px', closeButton: true })
+      .setLngLat(popupLngLat)
+      .setHTML(`
+        <div style="font-family:Inter,system-ui,sans-serif;font-size:12px;color:#111;line-height:1.75">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <div style="font-weight:800;font-size:13.5px;color:#1b5e20">
+              🛑 Ô 3D H3 (Res ${f.res || 14} · ${f.res === 12 ? '~25m' : f.res === 13 ? '~9m' : '~3m'})
+            </div>
+            <span style="background:${riskBg};color:${riskColor};padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:700">
+              ${riskLabel}
+            </span>
+          </div>
+
+          <div style="font-size:11px;color:#666;margin-bottom:8px">
+            Mã Cell: <code style="background:#e8f5e9;padding:2px 5px;border-radius:4px;color:#2e7d32;font-weight:600">${f.h3Index}</code>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px;background:#f8f9fa;padding:8px;border-radius:8px;text-align:center">
+            <div>
+              <div style="color:#777;font-size:9.5px;text-transform:uppercase;letter-spacing:.3px">TỔNG CHUYẾN</div>
+              <div style="font-weight:800;font-size:15px;color:#1565c0">${totalTrips}</div>
+            </div>
+            <div>
+              <div style="color:#777;font-size:9.5px;text-transform:uppercase;letter-spacing:.3px">TÀI XẾ</div>
+              <div style="font-weight:800;font-size:15px;color:#6a1b9a">${drivers}</div>
+            </div>
+            <div>
+              <div style="color:#777;font-size:9.5px;text-transform:uppercase;letter-spacing:.3px">ĐIỂM GPS</div>
+              <div style="font-weight:800;font-size:15px;color:#2e7d32">${f.count}</div>
+            </div>
+          </div>
+
+          <div style="margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+              <span style="color:#555;font-size:11px;font-weight:600">Tỷ lệ bẻ lái / né tránh</span>
+              <b style="color:${riskColor};font-size:12.5px">${avoidRatio.toFixed(1)}%</b>
+            </div>
+            <div style="background:#e0e0e0;border-radius:6px;height:7px;overflow:hidden">
+              <div style="width:${Math.min(100, Math.round(avoidRatio))}%;height:100%;background:${riskColor};border-radius:6px"></div>
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:#444;margin-bottom:6px;background:#fff;padding:4px 8px;border:1px solid #eee;border-radius:6px">
+            <span>✅ Đúng tuyến: <b>${normalTrips}</b></span>
+            <span>🚨 Né tránh: <b style="color:#c62828">${highDevTrips}</b></span>
+          </div>
+
+          <div style="border-top:1px solid #eee;padding-top:6px;display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:10.5px">
+            <div>
+              <div style="color:#888">Độ lệch trung bình</div>
+              <div style="font-weight:700;color:#e65100">${fmtDev(avgDev)}</div>
+            </div>
+            <div>
+              <div style="color:#888">Độ lệch tối đa</div>
+              <div style="font-weight:700;color:#b71c1c">${fmtDev(maxDev)}</div>
+            </div>
+          </div>
+
+          <div style="margin-top:6px;color:#aaa;font-size:9.5px">
+            📌 Tọa độ tâm cell: ${centerLat.toFixed(5)}, ${centerLng.toFixed(5)}
+          </div>
+        </div>
+      `)
+      .addTo(map);
+  } catch (err) {
+    loading.remove();
+  }
+}
+
+/**
  * HeatmapLayer:
  * 1. Smooth 2D heatmap gradient (toggleable)
  * 2. 3D H3 Hexagon Extrusion Grid (Res 12, radius < 10m, monochrome green scale, height ~ turn count)
@@ -340,9 +480,15 @@ export default function HeatmapLayer({
     }
   }, [map, showHeatmap, show3DH3Grid]);
 
-  // ── Pre-compute 3D H3 Hexagon GeoJSON statically (Ultra-fast 60 FPS) ───────
+  // ── Pre-compute 3D H3 Hexagon GeoJSON statically with Adaptive Resolution ─
   const h3GeoJSON = useMemo(() => {
     if (!points || points.length === 0) return { type: 'FeatureCollection', features: [] };
+
+    // Adaptive Resolution based on point density:
+    // >100k points (e.g. Porto 386k dataset): Res 12 (~25m) to prevent WebGL memory overflow
+    // 30k - 100k points: Res 13 (~9m)
+    // <30k points (e.g. driver trips / zoomed area): Res 14 (~3m) for street precision
+    const resLevel = points.length > 100000 ? 12 : points.length > 30000 ? 13 : 14;
 
     const h3CellMap = new Map();
     let maxCount = 1;
@@ -351,7 +497,7 @@ export default function HeatmapLayer({
       const pt = points[i];
       if (!pt.lat || !pt.lng) continue;
 
-      const cell = latLngToCell(pt.lat, pt.lng, 13);
+      const cell = latLngToCell(pt.lat, pt.lng, resLevel);
       const item = h3CellMap.get(cell);
       if (!item) {
         h3CellMap.set(cell, { cell, count: 1, totalDev: pt.deviation || 0, maxDev: pt.deviation || 0 });
@@ -376,6 +522,7 @@ export default function HeatmapLayer({
             h3Index: item.cell,
             count: item.count,
             ratio: ratio,
+            res: resLevel,
             height: Math.max(4, Math.round(ratio * 120)), // Relative height (4m to 120m)
             avgDev: Math.round(item.totalDev / item.count),
             maxDev: Math.round(item.maxDev),
@@ -387,7 +534,7 @@ export default function HeatmapLayer({
     return { type: 'FeatureCollection', features };
   }, [points]);
 
-  // ── 3D H3 Hexagon Extrusion Grid Layer (~3.6m radius, Res 13) ──────────────
+  // ── 3D H3 Hexagon Extrusion Grid Layer (~1.5m radius, Res 14) ──────────────
   useEffect(() => {
     if (!map) return;
 
@@ -423,36 +570,12 @@ export default function HeatmapLayer({
         },
       });
 
-      // Click on 3D H3 column → Show Popup
-      map.on('click', layerId, (e) => {
+      // Click on 3D H3 column → Show Rich Actionable Popup
+      map.on('click', layerId, async (e) => {
         e.originalEvent.stopPropagation();
         if (!e.features?.length) return;
         const f = e.features[0].properties;
-        const PopupClass = map._maplibregl?.Popup || window.maplibregl?.Popup;
-        new PopupClass({ offset: 12, maxWidth: '280px', closeButton: true })
-          .setLngLat(e.lngLat)
-          .setHTML(`
-            <div style="font-family:Inter,system-ui,sans-serif;font-size:12.5px;color:#111;line-height:1.7">
-              <div style="font-weight:800;font-size:13.5px;color:#1b5e20;margin-bottom:6px">
-                Ô 3D H3 Res 13 (Bán kính ~3.6m)
-              </div>
-              <div style="font-size:11px;color:#666;margin-bottom:8px">Mã Cell: <code style="background:#e8f5e9;padding:2px 4px;border-radius:4px;color:#2e7d32">${f.h3Index}</code></div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;background:#f9f9f9;padding:8px;border-radius:6px">
-                <div>
-                  <div style="color:#666;font-size:10px;text-transform:uppercase">LƯỢT BẺ LÁI</div>
-                  <div style="font-weight:800;font-size:16px;color:#2e7d32">${f.count} <span style="font-size:11px;font-weight:600;color:#666">(${Math.round((f.ratio || 0) * 100)}%)</span></div>
-                </div>
-                <div>
-                  <div style="color:#666;font-size:10px;text-transform:uppercase">ĐỘ CAO 3D</div>
-                  <div style="font-weight:800;font-size:16px;color:#1565c0">${f.height}m</div>
-                </div>
-              </div>
-              <div style="border-top:1px solid #eee;padding-top:6px;font-size:11px;color:#555">
-                Độ lệch TB: <b>${f.avgDev >= 1000 ? (f.avgDev/1000).toFixed(1)+'km' : f.avgDev+'m'}</b> · Tối đa: <b>${f.maxDev >= 1000 ? (f.maxDev/1000).toFixed(1)+'km' : f.maxDev+'m'}</b>
-              </div>
-            </div>
-          `)
-          .addTo(map);
+        await show3DH3CellPopup(map, e.lngLat, f);
       });
 
       map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
