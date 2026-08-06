@@ -352,7 +352,7 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 	var queryErr error
 	if limit > 0 {
 		rows, queryErr = w.pool.Query(r.Context(), `
-			SELECT latitude, longitude, deviation_meters
+			SELECT latitude, longitude, deviation_meters, trip_id
 			FROM deviation_events
 			WHERE created_at >= $1 AND created_at <= $2
 			ORDER BY deviation_meters DESC
@@ -360,7 +360,7 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 		`, fromTime, toTime, limit)
 	} else {
 		rows, queryErr = w.pool.Query(r.Context(), `
-			SELECT latitude, longitude, deviation_meters
+			SELECT latitude, longitude, deviation_meters, trip_id
 			FROM deviation_events
 			WHERE created_at >= $1 AND created_at <= $2
 			ORDER BY deviation_meters DESC
@@ -377,12 +377,13 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 		Lat       float64 `json:"lat"`
 		Lng       float64 `json:"lng"`
 		Deviation float64 `json:"deviation"`
+		TripID    string  `json:"trip_id"`
 	}
 
 	points := make([]point, 0, 1024)
 	for rows.Next() {
 		var p point
-		if err := rows.Scan(&p.Lat, &p.Lng, &p.Deviation); err != nil {
+		if err := rows.Scan(&p.Lat, &p.Lng, &p.Deviation, &p.TripID); err != nil {
 			continue
 		}
 		points = append(points, p)

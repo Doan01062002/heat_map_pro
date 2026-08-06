@@ -491,21 +491,39 @@ export default function HeatmapLayer({
     const resLevel = points.length > 100000 ? 12 : points.length > 30000 ? 13 : 14;
 
     const h3CellMap = new Map();
-    let maxCount = 1;
+    let maxAvoidTrips = 1;
 
     for (let i = 0; i < points.length; i++) {
       const pt = points[i];
       if (!pt.lat || !pt.lng) continue;
 
       const cell = latLngToCell(pt.lat, pt.lng, resLevel);
+      const isAvoidance = (pt.deviation || 0) > 50;
+      const tripId = pt.trip_id || `pt-${i}`;
       const item = h3CellMap.get(cell);
+
       if (!item) {
-        h3CellMap.set(cell, { cell, count: 1, totalDev: pt.deviation || 0, maxDev: pt.deviation || 0 });
+        const avoidTripsSet = new Set();
+        if (isAvoidance && tripId) avoidTripsSet.add(tripId);
+        h3CellMap.set(cell, {
+          cell,
+          count: 1,
+          avoidTripsSet: avoidTripsSet,
+          totalDev: pt.deviation || 0,
+          maxDev: pt.deviation || 0,
+        });
       } else {
         item.count++;
-        if (item.count > maxCount) maxCount = item.count;
+        if (isAvoidance && tripId) item.avoidTripsSet.add(tripId);
         item.totalDev += (pt.deviation || 0);
         item.maxDev = Math.max(item.maxDev, pt.deviation || 0);
+      }
+    }
+
+    for (const item of h3CellMap.values()) {
+      const avoidTripsCount = item.avoidTripsSet ? item.avoidTripsSet.size : 0;
+      if (avoidTripsCount > maxAvoidTrips) {
+        maxAvoidTrips = avoidTripsCount;
       }
     }
 
@@ -514,17 +532,23 @@ export default function HeatmapLayer({
       try {
         const boundary = cellToBoundary(item.cell, true);
         if (!boundary || boundary.length === 0) continue;
-        const ratio = item.count / maxCount; // Relative percentage from 0.0 to 1.0 (percentile scale)
+
+        const avoidTripsCount = item.avoidTripsSet ? item.avoidTripsSet.size : 0;
+        // Ratio based strictly on SỐ CHUYẾN XE NÉ TRÁNH THỰC TẾ (Unique Avoidance Trips)
+        const ratio = maxAvoidTrips > 0 ? (avoidTripsCount / maxAvoidTrips) : 0;
+        const avgDev = Math.round(item.totalDev / item.count);
+
         features.push({
           type: 'Feature',
           geometry: { type: 'Polygon', coordinates: [boundary] },
           properties: {
             h3Index: item.cell,
             count: item.count,
+            avoidTripsCount: avoidTripsCount,
             ratio: ratio,
             res: resLevel,
-            height: Math.max(4, Math.round(ratio * 120)), // Relative height (4m to 120m)
-            avgDev: Math.round(item.totalDev / item.count),
+            height: Math.max(4, Math.round(ratio * 140)), // Extrusion height strictly proportional to SỐ CHUYẾN NÉ TRÁNH (4m to 140m)
+            avgDev: avgDev,
             maxDev: Math.round(item.maxDev),
           },
         });
@@ -557,12 +581,11 @@ export default function HeatmapLayer({
         paint: {
           'fill-extrusion-color': [
             'interpolate', ['linear'], ['get', 'ratio'],
-            0.0,  '#E8F5E9',   // Very light mint green (minimum density)
-            0.2,  '#A5D6A7',   // Light green (20% of peak density)
-            0.4,  '#66BB6A',   // Vibrant green (40% of peak density)
-            0.6,  '#388E3C',   // Deep green (60% of peak density)
-            0.8,  '#1B5E20',   // Forest green (80% of peak density)
-            1.0,  '#052907',   // Darkest emerald green (Hotspot peak - 100%)
+            0.00, '#00e664',   // Safe Fresh Mint Green (Low avoidance volume)
+            0.25, '#ccee00',   // Light Yellow-Green
+            0.50, '#ff9f43',   // High Orange (Significant avoidance)
+            0.75, '#ff4444',   // Bright Red (Hotspot avoidance)
+            1.00, '#b71c1c',   // Critical Deep Red Peak (Maximum avoidance volume)
           ],
           'fill-extrusion-height': ['get', 'height'],
           'fill-extrusion-base': 0,
