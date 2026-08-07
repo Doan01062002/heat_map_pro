@@ -31,22 +31,25 @@ WEATHER_CODES = {
 async def fetch_weather(lat: float, lng: float, timestamp_ms: Optional[int] = None) -> Optional[WeatherEvidence]:
     """
     Fetch exact historical or real-time weather at coordinates using Open-Meteo API (100% Free, 0 API Key).
-    If timestamp_ms is provided for historical driver trips (e.g. Porto 2013 dataset),
-    queries Open-Meteo Historical Archive API for that exact historical date & hour!
-    Timeout: 4 seconds.
+    Upgraded to High-Precision 15-Minute Resolution (minutely_15) for exact timestamp alignment (e.g. 14:05 -> 14:00-14:15 interval).
+    Timeout: 4.0 seconds.
     """
     if timestamp_ms and timestamp_ms > 0:
         try:
             dt = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
             date_str = dt.strftime("%Y-%m-%d")
-            hour_idx = dt.hour
-            formatted_time_str = dt.strftime("%Y-%m-%d %H:00 UTC")
+            
+            # Calculate 15-minute interval index (0 to 95 for 24 hours)
+            min15_idx = dt.hour * 4 + (dt.minute // 15)
+            min15_minute_str = f"{(dt.minute // 15) * 15:02d}"
+            formatted_time_str = dt.strftime(f"%Y-%m-%d %H:{min15_minute_str} UTC (15m Interval)")
 
             params = {
                 "latitude": lat,
                 "longitude": lng,
                 "start_date": date_str,
                 "end_date": date_str,
+                "minutely_15": "temperature_2m,rain,weather_code,wind_speed_10m",
                 "hourly": "temperature_2m,rain,weather_code,wind_speed_10m",
                 "timezone": "UTC"
             }
@@ -55,12 +58,38 @@ async def fetch_weather(lat: float, lng: float, timestamp_ms: Optional[int] = No
                 resp = await client.get(OPEN_METEO_ARCHIVE_URL, params=params)
                 if resp.status_code == 200:
                     data = resp.json()
+                    
+                    # 1. Try High-Precision 15-Minute Resolution Data (minutely_15)
+                    min15_data = data.get("minutely_15", {})
+                    if min15_data and "temperature_2m" in min15_data:
+                        temps = min15_data.get("temperature_2m", [])
+                        rains = min15_data.get("rain", [])
+                        codes = min15_data.get("weather_code", [])
+                        winds = min15_data.get("wind_speed_10m", [])
+
+                        if temps and len(temps) > min15_idx:
+                            temp = temps[min15_idx]
+                            rain = rains[min15_idx] if len(rains) > min15_idx else 0.0
+                            code = codes[min15_idx] if len(codes) > min15_idx else 0
+                            wind = winds[min15_idx] if len(winds) > min15_idx else 0.0
+                            desc = WEATHER_CODES.get(code, f"Thời tiết mã {code}")
+
+                            return WeatherEvidence(
+                                temperature=temp,
+                                rain_mm=rain,
+                                description=desc,
+                                wind_speed=wind,
+                                weather_time=formatted_time_str,
+                            )
+
+                    # 2. Fallback to Hourly Data
                     hourly = data.get("hourly", {})
                     temps = hourly.get("temperature_2m", [])
                     rains = hourly.get("rain", [])
                     codes = hourly.get("weather_code", [])
                     winds = hourly.get("wind_speed_10m", [])
 
+                    hour_idx = dt.hour
                     if temps and len(temps) > hour_idx:
                         temp = temps[hour_idx]
                         rain = rains[hour_idx] if len(rains) > hour_idx else 0.0
@@ -73,7 +102,7 @@ async def fetch_weather(lat: float, lng: float, timestamp_ms: Optional[int] = No
                             rain_mm=rain,
                             description=desc,
                             wind_speed=wind,
-                            weather_time=formatted_time_str,
+                            weather_time=dt.strftime("%Y-%m-%d %H:00 UTC"),
                         )
         except Exception as e:
             print(f"[Tool: Weather Archive Error] {e}")
