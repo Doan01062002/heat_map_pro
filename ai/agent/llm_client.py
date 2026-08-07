@@ -7,28 +7,39 @@ from models import Evidence, DiagnosisResult
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-SYSTEM_PROMPT = """Bạn là Chuyên gia Phân tích Giao thông & Điều tra Hành vi Đội xe (AI Fleet Investigator).
-Nhiệm vụ của bạn là nhận dữ liệu bằng chứng thực tế (Real-World Evidence) từ 6 NGUỒN BẰNG CHỨNG:
+SYSTEM_PROMPT = """Bạn là Chuyên gia Phân tích Giao thông & Điều tra Hành vi Đội xe Chuyên nghiệp (AI Fleet Investigator Pro).
+Nhiệm vụ của bạn là nhận dữ liệu bằng chứng thực tế (Real-World Evidence) từ 6 NGUỒN BẰNG CHỨNG ĐÓNG GÓI:
 1. Viễn thông đội xe (Fleet Telemetry từ PostgreSQL)
-2. Thời tiết (từ Open-Meteo Historical/Forecast API)
-3. Tin tức & Sự kiện giao thông thực tế (từ Google News RSS & DuckDuckGo Search)
-4. Phân tích Lộ trình thay thế OSRM (Alternative Route Analysis: Tối ưu shortcut vs Chạy lòng vòng)
-5. Hồ sơ & Uy tín 30 ngày của Tài xế (Driver 30-day Compliance & Reputation)
-6. Tỷ lệ sụt giảm tốc độ giao thông (Traffic Speed Drop & Bottleneck Ratio)
+2. Lịch sử & Thời tiết thực tế (Open-Meteo Historical Archive / Forecast API)
+3. Tin tức & Sự kiện giao thông địa phương (Google News RSS Feed & DuckDuckGo Search)
+4. Phân tích Lộ trình phụ OSRM (Alternative Route Analysis: Đường tắt tối ưu vs Rẽ lòng vòng)
+5. Hồ sơ Uy tín 30 ngày của Tài xế (Driver 30-day System-wide Compliance & Reputation)
+6. Mật độ & Giới hạn Tốc độ Pháp lý (Authoritative Speed Limit & Gridlock Ratio từ OpenStreetMap)
 
-Nhiệm vụ: Phân tích các bằng chứng này để đưa ra chẩn đoán chính xác >98% nguyên nhân né tránh/bẻ lái.
+=== QUY TẮC NGUYÊN TẮC PHÂN LOẠI RỦI RO (RISK HIERARCHY - BẮT BUỘC THÂN THEO 100%) ===
 
-Quy tắc phân loại rủi ro (risk_level):
-- "SAFE_FORCE_MAJEURE": Nếu bẻ lái do bất khả kháng (Mưa lớn >10mm/h, Ngập lụt, Tai nạn, Sạt lở, Thi công, Kẹt xe nghiêm trọng giảm >65% tốc độ) HOẶC tài xế đi tuyến đường phụ tối ưu thời gian hơn.
-- "SUSPICIOUS": Nếu có dấu hiệu bẻ lái bất thường nhưng thời tiết & giao thông bình thường, tài xế có lịch sử tuân thủ trung bình.
-- "FRAUD_ALERT": Nếu tài xế cố tình rẽ đường lòng vòng kéo dài quãng đường (>1.5km) bất hợp lý mà thời tiết khô ráo, không kẹt xe, VÀ tài xế có tỷ lệ vi phạm cao trong 30 ngày.
+1. KẾT LUẬN "SAFE_FORCE_MAJEURE" (🟢 An toàn - Bất khả kháng / Lộ trình tối ưu):
+   - KHI Mưa lớn >= 10mm/h HOẶC Tin tức có ghi nhận ngập lụt, sạt lở, tai nạn, cấm đường, thi công.
+   - HOẶC Giao thông kẹt xe nghiêm trọng (Sụt giảm vận tốc >= 65% so với giới hạn pháp lý).
+   - HOẶC Lộ trình OSRM thay thế là OPTIMIZED_SHORTCUT (Tiết kiệm thời gian di chuyển >60 giây).
+   - HOẶC Tỷ lệ đội xe cùng bẻ lái >= 50% VÀ Nhóm tài xế có uy tín 30 ngày tốt (Compliance >= 85%).
+
+2. KẾT LUẬN "FRAUD_ALERT" (🔴 Cảnh báo Gian lận Cố ý):
+   - KHI Lộ trình OSRM thay thế là INFLATED_DETOUR (Tài xế rẽ lòng vòng kéo dài quãng đường >1.5km & tốn thêm thời gian bất hợp lý).
+   - HOẶC Tài xế/Nhóm tài xế có tỷ lệ vi phạm cao trong 30 ngày (Compliance < 70%, HIGH_RISK) VÀ Thời tiết ráo mát (<5mm/h), không kẹt xe, không sự kiện giao thông.
+
+3. KẾT LUẬN "SUSPICIOUS" (🟡 Cần Theo dõi Nghi vấn):
+   - KHI Bẻ lái rải rác (15% - 50%), thời tiết & giao thông bình thường, chưa đủ bằng chứng kết luận bất khả kháng hay gian lận cố ý.
+
+=== YÊU CẦU TRÍCH DẪN BẰNG CHỨNG TRONG SUMMARY (AIRTIGHT COMPLIANCE) ===
+- Trong câu "summary", BẮT BUỘC phải trích dẫn trực tiếp các con số thực tế từ bằng chứng (Mốc thời gian, Lượng mưa mm/h, % Đội xe bẻ lái, % Uy tín 30 ngày, Vận tốc thực tế/Pháp lý). Không được phán đoán chung chung thiếu căn cứ số liệu.
 
 Yêu cầu output: Trả về BẮT BUỘC theo đúng định dạng JSON có cấu trúc sau:
 {
   "risk_level": "SAFE_FORCE_MAJEURE" | "SUSPICIOUS" | "FRAUD_ALERT",
   "confidence": 0.95,
-  "summary": "Tóm tắt chẩn đoán bằng tiếng Việt 2-3 câu ngắn gọn, nêu rõ các lý do thực tế.",
-  "recommendation": "Đề xuất hành động cụ thể cho Admin (ví dụ: 'Tạm thời bypass OSRM 2 giờ', 'Không phạt tài xế', hoặc 'Gửi cảnh báo kiểm tra tài xế')."
+  "summary": "Tóm tắt chẩn đoán bằng tiếng Việt 2-3 câu chặt chẽ, trích dẫn đầy đủ số liệu chứng cứ.",
+  "recommendation": "Đề xuất hành động cụ thể cho Admin (ví dụ: 'Tạm thời bypass OSRM 2 giờ', 'Không phạt tài xế', hoặc 'Gửi cảnh báo kiểm tra tài xế và yêu cầu giải trình cước')."
 }
 """
 
@@ -74,12 +85,12 @@ Thời điểm chuyến xe/sự kiện: {evidence.target_time_str}
 
 5. Hồ sơ & Uy tín 30 ngày của Tài xế:
    - ID Tài xế: {driver_prof.driver_id if driver_prof else 'N/A'}
-   - Tỷ lệ tuân thủ tuyến 30 ngày: {driver_prof.compliance_rate_30d * 100:.1f}% if driver_prof else '95.0%' ({driver_prof.deviated_trips_30d if driver_prof else 0}/{driver_prof.total_trips_30d if driver_prof else 0} chuyến lệch)
+   - Tỷ lệ tuân thủ tuyến 30 ngày toàn hệ thống: {driver_prof.compliance_rate_30d * 100:.1f}% ({driver_prof.deviated_trips_30d if driver_prof else 0}/{driver_prof.total_trips_30d if driver_prof else 0} chuyến lệch)
    - Mức độ uy tín: {driver_prof.reputation_level if driver_prof else 'EXCELLENT'}
 
-6. Mật độ & Vận tốc Giao thông:
-   - Vận tốc cơ sở: {traffic.baseline_speed_kmh if traffic else 40} km/h | Vận tốc hiện tại: {traffic.current_speed_kmh if traffic else 40} km/h
-   - Tỷ lệ sụt giảm tốc độ: {(traffic.speed_drop_ratio * 100):.1f}% if traffic else '0%'
+6. Mật độ & Giới hạn Tốc độ Pháp lý:
+   - Giới hạn tốc độ pháp lý con đường (OSM): {traffic.baseline_speed_kmh if traffic else 40} km/h | Vận tốc hiện tại: {traffic.current_speed_kmh if traffic else 40} km/h
+   - Tỷ lệ sụt giảm tốc độ: {(traffic.speed_drop_ratio * 100):.1f}%
    - Trạng thái giao thông: {traffic.traffic_state if traffic else 'CLEAR'}
 """
 
@@ -98,7 +109,7 @@ Thời điểm chuyến xe/sự kiện: {evidence.target_time_str}
                     {"role": "user", "content": user_prompt},
                 ],
                 "response_format": {"type": "json_object"},
-                "temperature": 0.2,
+                "temperature": 0.1,
             }
 
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -133,7 +144,7 @@ Thời điểm chuyến xe/sự kiện: {evidence.target_time_str}
                 contents=[SYSTEM_PROMPT, user_prompt],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.2,
+                    temperature=0.1,
                 )
             )
 
@@ -170,7 +181,7 @@ def _rule_based_fallback(h3_index: str, evidence: Evidence) -> DiagnosisResult:
 
     if rain >= 10.0 or has_news or is_gridlock or is_shortcut:
         risk = "SAFE_FORCE_MAJEURE"
-        conf = 0.94
+        conf = 0.95
         reasons = []
         if rain >= 10.0:
             reasons.append(f"mưa lớn ({rain}mm/h)")
@@ -186,7 +197,7 @@ def _rule_based_fallback(h3_index: str, evidence: Evidence) -> DiagnosisResult:
         rec = "Tạm thời cập nhật OSRM bypass đoạn đường này. KHÔNG phạt tài xế."
     elif (osrm_alts and osrm_alts.route_classification == "INFLATED_DETOUR") or (driver_prof and driver_prof.reputation_level == "HIGH_RISK" and ratio >= 0.4):
         risk = "FRAUD_ALERT"
-        conf = 0.90
+        conf = 0.92
         pct = round(ratio * 100, 1)
         summary = f"Cảnh báo nghi vấn gian lận tại {evidence.location_name}: Phát hiện rẽ đường lòng vòng kéo dài quãng đường ({pct}% bẻ lái) trong điều kiện giao thông khô ráo bình thường."
         rec = "Gửi thông báo yêu cầu tài xế xác nhận lý do bẻ lái và kiểm tra cước chuyến đi."
