@@ -22,6 +22,11 @@ class TelemetryEvidence(BaseModel):
     unique_trips: int = 0
     high_dev_trips: int = 0
     fleet_deviation_ratio: float = 0.0
+    adjusted_deviation_ratio: float = 0.0  # Bayesian smoothed ratio
+    wilson_lower_bound: float = 0.0         # 95% Wilson confidence lower bound
+    wilson_upper_bound: float = 0.0         # 95% Wilson confidence upper bound
+    margin_of_error: float = 0.0            # Statistical error margin
+    dynamic_threshold_m: float = 150.0      # Road-class adapted deviation threshold (50m, 150m, 350m)
     avg_speed_kmh: float = 0.0
     avg_deviation_m: float = 0.0
 

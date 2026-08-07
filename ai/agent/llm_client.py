@@ -9,7 +9,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 SYSTEM_PROMPT = """Bạn là Chuyên gia Phân tích Giao thông & Điều tra Hành vi Đội xe Chuyên nghiệp (AI Fleet Investigator Pro).
 Nhiệm vụ của bạn là nhận dữ liệu bằng chứng thực tế (Real-World Evidence) từ 6 NGUỒN BẰNG CHỨNG ĐÓNG GÓI:
-1. Viễn thông đội xe (Fleet Telemetry từ PostgreSQL)
+1. Viễn thông đội xe (Fleet Telemetry từ PostgreSQL - Đã làm mịn Bayes & Tính Khoảng Tin cậy Wilson 95%)
 2. Lịch sử & Thời tiết thực tế (Open-Meteo Historical Archive / Forecast API)
 3. Tin tức & Sự kiện giao thông địa phương (Google News RSS Feed & DuckDuckGo Search)
 4. Phân tích Lộ trình phụ OSRM (Alternative Route Analysis: Đường tắt tối ưu vs Rẽ lòng vòng)
@@ -22,7 +22,7 @@ Nhiệm vụ của bạn là nhận dữ liệu bằng chứng thực tế (Real
    - KHI Mưa lớn >= 10mm/h HOẶC Tin tức có ghi nhận ngập lụt, sạt lở, tai nạn, cấm đường, thi công.
    - HOẶC Giao thông kẹt xe nghiêm trọng (Sụt giảm vận tốc >= 65% so với giới hạn pháp lý).
    - HOẶC Lộ trình OSRM thay thế là OPTIMIZED_SHORTCUT (Tiết kiệm thời gian di chuyển >60 giây).
-   - HOẶC Tỷ lệ đội xe cùng bẻ lái >= 50% VÀ Nhóm tài xế có uy tín 30 ngày tốt (Compliance >= 85%).
+   - HOẶC Tỷ lệ đội xe cùng bẻ lái (Đã làm mịn Bayes) >= 50% VÀ Nhóm tài xế có uy tín 30 ngày tốt (Compliance >= 85%).
 
 2. KẾT LUẬN "FRAUD_ALERT" (🔴 Cảnh báo Gian lận Cố ý):
    - KHI Lộ trình OSRM thay thế là INFLATED_DETOUR (Tài xế rẽ lòng vòng kéo dài quãng đường >1.5km & tốn thêm thời gian bất hợp lý).
@@ -31,8 +31,8 @@ Nhiệm vụ của bạn là nhận dữ liệu bằng chứng thực tế (Real
 3. KẾT LUẬN "SUSPICIOUS" (🟡 Cần Theo dõi Nghi vấn):
    - KHI Bẻ lái rải rác (15% - 50%), thời tiết & giao thông bình thường, chưa đủ bằng chứng kết luận bất khả kháng hay gian lận cố ý.
 
-=== YÊU CẦU TRÍCH DẪN BẰNG CHỨNG TRONG SUMMARY (AIRTIGHT COMPLIANCE) ===
-- Trong câu "summary", BẮT BUỘC phải trích dẫn trực tiếp các con số thực tế từ bằng chứng (Mốc thời gian, Lượng mưa mm/h, % Đội xe bẻ lái, % Uy tín 30 ngày, Vận tốc thực tế/Pháp lý). Không được phán đoán chung chung thiếu căn cứ số liệu.
+=== QUY TẮC XỬ LÝ MẪU ÍT & BIÊN ĐỘ SAI SỐ THỐNG KÊ (WILSON MARGIN OF ERROR) ===
+- Nếu Biên độ Sai số Thống kê (margin_of_error) > 0.25 (do số mẫu ít unique_trips < 5), AI BẮT BUỘC phải hạ độ tin cậy "confidence" xuống <= 0.75 và nêu rõ trong "summary": "Tỷ lệ bẻ lái đã được làm mịn Bayes (chỉ số adjusted_ratio) do cỡ mẫu nhỏ."
 
 Yêu cầu output: Trả về BẮT BUỘC theo đúng định dạng JSON có cấu trúc sau:
 {
@@ -62,8 +62,11 @@ Thời điểm chuyến xe/sự kiện: {evidence.target_time_str}
 
 === 6 NGUỒN BẰNG CHỨNG THỰC TẾ ===
 1. Viễn thông đội xe (Mốc {evidence.target_time_str}):
-   - Tổng số sự kiện lệch: {telemetry.total_events} | Số tài xế: {telemetry.unique_drivers}
-   - Tỷ lệ đội xe cùng bẻ lái: {telemetry.fleet_deviation_ratio * 100:.1f}% ({telemetry.high_dev_trips}/{telemetry.unique_trips} chuyến)
+   - Tổng số sự kiện lệch: {telemetry.total_events} | Số tài xế: {telemetry.unique_drivers} | Số chuyến đi: {telemetry.unique_trips}
+   - Ngưỡng lệch mét động theo loại đường: {telemetry.dynamic_threshold_m}m
+   - Tỷ lệ lệch thô: {telemetry.fleet_deviation_ratio * 100:.1f}% ({telemetry.high_dev_trips}/{telemetry.unique_trips} chuyến)
+   - Tỷ lệ lệch ĐÃ LÀM MỊN BAYES: {telemetry.adjusted_deviation_ratio * 100:.1f}%
+   - Khoảng tin cậy Wilson 95%: [{telemetry.wilson_lower_bound * 100:.1f}%, {telemetry.wilson_upper_bound * 100:.1f}%] (Biên sai số: ±{telemetry.margin_of_error * 100:.1f}%)
    - Vận tốc trung bình: {telemetry.avg_speed_kmh} km/h | Độ lệch TB: {telemetry.avg_deviation_m}m
 
 2. Thời tiết (Mốc {weather_time_str}):
@@ -174,14 +177,14 @@ def _rule_based_fallback(h3_index: str, evidence: Evidence) -> DiagnosisResult:
     traffic = evidence.traffic_speed
 
     rain = weather.rain_mm if (weather and weather.rain_mm is not None) else 0.0
-    ratio = telemetry.fleet_deviation_ratio
+    ratio = telemetry.adjusted_deviation_ratio if telemetry.adjusted_deviation_ratio > 0 else telemetry.fleet_deviation_ratio
     has_news = len(news) > 0
     is_gridlock = traffic and traffic.traffic_state == "SEVERE_GRIDLOCK"
     is_shortcut = osrm_alts and osrm_alts.route_classification == "OPTIMIZED_SHORTCUT"
 
     if rain >= 10.0 or has_news or is_gridlock or is_shortcut:
         risk = "SAFE_FORCE_MAJEURE"
-        conf = 0.95
+        conf = 0.95 if telemetry.margin_of_error <= 0.25 else 0.75
         reasons = []
         if rain >= 10.0:
             reasons.append(f"mưa lớn ({rain}mm/h)")
@@ -197,15 +200,15 @@ def _rule_based_fallback(h3_index: str, evidence: Evidence) -> DiagnosisResult:
         rec = "Tạm thời cập nhật OSRM bypass đoạn đường này. KHÔNG phạt tài xế."
     elif (osrm_alts and osrm_alts.route_classification == "INFLATED_DETOUR") or (driver_prof and driver_prof.reputation_level == "HIGH_RISK" and ratio >= 0.4):
         risk = "FRAUD_ALERT"
-        conf = 0.92
+        conf = 0.92 if telemetry.margin_of_error <= 0.25 else 0.70
         pct = round(ratio * 100, 1)
-        summary = f"Cảnh báo nghi vấn gian lận tại {evidence.location_name}: Phát hiện rẽ đường lòng vòng kéo dài quãng đường ({pct}% bẻ lái) trong điều kiện giao thông khô ráo bình thường."
+        summary = f"Cảnh báo nghi vấn gian lận tại {evidence.location_name}: Phát hiện rẽ đường lòng vòng kéo dài quãng đường ({pct}% bẻ lái đã làm mịn) trong điều kiện giao thông khô ráo bình thường."
         rec = "Gửi thông báo yêu cầu tài xế xác nhận lý do bẻ lái và kiểm tra cước chuyến đi."
     else:
         risk = "SUSPICIOUS"
-        conf = 0.75
+        conf = 0.75 if telemetry.margin_of_error <= 0.25 else 0.60
         pct = round(ratio * 100, 1)
-        summary = f"Ghi nhận {telemetry.high_dev_trips} chuyến bẻ lái ({pct}%) tại {evidence.location_name} chưa rõ nguyên nhân. Thời tiết và giao thông bình thường."
+        summary = f"Ghi nhận {telemetry.high_dev_trips} chuyến bẻ lái ({pct}% đã làm mịn Bayes, biên sai số ±{round(telemetry.margin_of_error*100, 1)}%) tại {evidence.location_name}. Thời tiết và giao thông bình thường."
         rec = "Theo dõi thêm biến động trong 30 phút tới."
 
     return DiagnosisResult(
