@@ -24,7 +24,7 @@ async def run_investigation(req: InvestigateRequest) -> DiagnosisResult:
         query_telemetry(req.h3_index, req.lat, req.lng, req.time_window_minutes, req.timestamp_ms),
         fetch_weather(req.lat, req.lng, req.timestamp_ms),
         reverse_geocode(req.lat, req.lng),
-        query_driver_profile(req.driver_id, req.h3_index),
+        query_driver_profile(req.driver_id, req.h3_index, req.lat, req.lng),
     )
 
     # Step 2: Run secondary tools using initial telemetry data
