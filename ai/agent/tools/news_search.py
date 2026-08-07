@@ -9,25 +9,31 @@ from typing import List, Optional
 from models import NewsItem
 from duckduckgo_search import DDGS
 
-# Road entity normalization dictionary (Vietnam & Global)
-ROAD_ALIASES = {
-    "ql1a": "Quốc lộ 1A",
-    "nh1a": "Quốc lộ 1A",
-    "ql5": "Quốc lộ 5",
-    "ql13": "Quốc lộ 13",
-    "ct01": "Cao tốc Bắc Nam",
-}
+def expand_road_acronym_dynamically(name: str) -> str:
+    """
+    Dynamically expands highway/road acronyms (e.g. ql1a -> Quốc lộ 1A, ct01 -> Cao tốc 01, nh1 -> National Highway 1)
+    without static hardcoded dictionaries. Uses dynamic regex pattern matching.
+    """
+    cleaned = name.strip()
+    match_ql = re.match(r'^(ql|nh)(\d+[a-z]?)$', cleaned, re.IGNORECASE)
+    if match_ql:
+        return f"Quốc lộ {match_ql.group(2).upper()}"
+
+    match_ct = re.match(r'^(ct)(\d+[a-z]?)$', cleaned, re.IGNORECASE)
+    if match_ct:
+        return f"Cao tốc {match_ct.group(2).upper()}"
+
+    return cleaned
 
 def normalize_location_entity(location_name: str) -> tuple[str, str, str]:
     """
-    Normalize location entity and detect language mode (vi | pt | en):
+    Normalize location entity and detect language mode (vi | pt | en) dynamically:
     Returns (cleaned_location_name, language_code, search_keywords)
     """
     raw_short = location_name.split(",")[0].strip() if "," in location_name else location_name.strip()
     
-    # 1. Road Alias Resolution
-    lower_short = raw_short.lower()
-    cleaned_short = ROAD_ALIASES.get(lower_short, raw_short)
+    # 1. Dynamic Road Acronym Expansion
+    cleaned_short = expand_road_acronym_dynamically(raw_short)
 
     # 2. Language & Keyword Detection
     # Detect Portuguese (Porto dataset)
@@ -69,7 +75,7 @@ def is_within_temporal_window(pub_date_str: str, target_timestamp_ms: Optional[i
 async def search_incidents(lat: float, lng: float, location_name: str, timestamp_ms: Optional[int] = None) -> List[NewsItem]:
     """
     Search real-world traffic incidents using Google News RSS & DuckDuckGo with:
-    1. Entity Normalization & Multilingual Keyword Selection (vi/pt/en).
+    1. Dynamic Entity Normalization & Multilingual Keyword Selection (vi/pt/en).
     2. Strict +-48h Temporal Publication Window Filtering (Eliminates out-of-date noise).
     100% Free, no API key required.
     Timeout: 4.0 seconds.
