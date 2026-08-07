@@ -8,24 +8,26 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 SYSTEM_PROMPT = """Bạn là Chuyên gia Phân tích Giao thông & Điều tra Hành vi Đội xe (AI Fleet Investigator).
-Nhiệm vụ của bạn là nhận dữ liệu bằng chứng thực tế (Real-World Evidence) bao gồm:
-1. Dữ liệu viễn thông đội xe (Fleet Telemetry từ PostgreSQL)
-2. Thời tiết thực tế (từ Open-Meteo API)
-3. Tin tức & Sự kiện giao thông địa phương (từ DuckDuckGo Search)
-4. Địa danh vị trí (từ OpenStreetMap Nominatim)
+Nhiệm vụ của bạn là nhận dữ liệu bằng chứng thực tế (Real-World Evidence) từ 6 NGUỒN BẰNG CHỨNG:
+1. Viễn thông đội xe (Fleet Telemetry từ PostgreSQL)
+2. Thời tiết (từ Open-Meteo Historical/Forecast API)
+3. Tin tức & Sự kiện giao thông thực tế (từ Google News RSS & DuckDuckGo Search)
+4. Phân tích Lộ trình thay thế OSRM (Alternative Route Analysis: Tối ưu shortcut vs Chạy lòng vòng)
+5. Hồ sơ & Uy tín 30 ngày của Tài xế (Driver 30-day Compliance & Reputation)
+6. Tỷ lệ sụt giảm tốc độ giao thông (Traffic Speed Drop & Bottleneck Ratio)
 
-Nhiệm vụ: Phân tích các bằng chứng này để đưa ra chẩn đoán chính xác 100% nguyên nhân né tránh/lệch đường.
+Nhiệm vụ: Phân tích các bằng chứng này để đưa ra chẩn đoán chính xác >98% nguyên nhân né tránh/bẻ lái.
 
 Quy tắc phân loại rủi ro (risk_level):
-- "SAFE_FORCE_MAJEURE": Nếu bẻ lái do bất khả kháng (Mưa to >20mm/h, Ngập nước, Tai nạn, Sạt lở, Thi công, Chốt giao thông). Tỷ lệ đội xe cùng rẽ > 50%.
-- "SUSPICIOUS": Nếu chỉ có 1-2 xe bẻ lái, không có mưa ngập hay sự kiện bất thường. Cần theo dõi.
-- "FRAUD_ALERT": Nếu tài xế cố tình chạy lòng vòng kéo dài quãng đường cước bất hợp lý (>1km) mà thời tiết & giao thông bình thường.
+- "SAFE_FORCE_MAJEURE": Nếu bẻ lái do bất khả kháng (Mưa lớn >10mm/h, Ngập lụt, Tai nạn, Sạt lở, Thi công, Kẹt xe nghiêm trọng giảm >65% tốc độ) HOẶC tài xế đi tuyến đường phụ tối ưu thời gian hơn.
+- "SUSPICIOUS": Nếu có dấu hiệu bẻ lái bất thường nhưng thời tiết & giao thông bình thường, tài xế có lịch sử tuân thủ trung bình.
+- "FRAUD_ALERT": Nếu tài xế cố tình rẽ đường lòng vòng kéo dài quãng đường (>1.5km) bất hợp lý mà thời tiết khô ráo, không kẹt xe, VÀ tài xế có tỷ lệ vi phạm cao trong 30 ngày.
 
 Yêu cầu output: Trả về BẮT BUỘC theo đúng định dạng JSON có cấu trúc sau:
 {
   "risk_level": "SAFE_FORCE_MAJEURE" | "SUSPICIOUS" | "FRAUD_ALERT",
   "confidence": 0.95,
-  "summary": "Tóm tắt chẩn đoán bằng tiếng Việt 2-3 câu ngắn gọn, nêu rõ lý do thực tế.",
+  "summary": "Tóm tắt chẩn đoán bằng tiếng Việt 2-3 câu ngắn gọn, nêu rõ các lý do thực tế.",
   "recommendation": "Đề xuất hành động cụ thể cho Admin (ví dụ: 'Tạm thời bypass OSRM 2 giờ', 'Không phạt tài xế', hoặc 'Gửi cảnh báo kiểm tra tài xế')."
 }
 """
@@ -33,30 +35,29 @@ Yêu cầu output: Trả về BẮT BUỘC theo đúng định dạng JSON có c
 async def generate_diagnosis(h3_index: str, evidence: Evidence) -> DiagnosisResult:
     """
     Calls Groq API (or Gemini API, or uses rules fallback if API Key missing/fails)
-    to generate grounded diagnosis.
+    to generate grounded diagnosis based on 6 evidence dimensions.
     """
     telemetry = evidence.fleet_telemetry
     weather = evidence.weather
     news = evidence.news
+    osrm_alts = evidence.osrm_alternatives
+    driver_prof = evidence.driver_profile
+    traffic = evidence.traffic_speed
 
     # Prepare evidence context prompt
     weather_time_str = weather.weather_time if (weather and weather.weather_time) else "N/A"
     user_prompt = f"""Hãy chẩn đoán điểm nóng ô H3 ({h3_index}) tại vị trí: {evidence.location_name}
 Thời điểm chuyến xe/sự kiện: {evidence.target_time_str}
 
-=== BẰNG CHỨNG THỰC TẾ ===
-1. Viễn thông đội xe (tại mốc thời gian {evidence.target_time_str}):
-   - Tổng số sự kiện lệch: {telemetry.total_events}
-   - Số tài xế ảnh hưởng: {telemetry.unique_drivers}
+=== 6 NGUỒN BẰNG CHỨNG THỰC TẾ ===
+1. Viễn thông đội xe (Mốc {evidence.target_time_str}):
+   - Tổng số sự kiện lệch: {telemetry.total_events} | Số tài xế: {telemetry.unique_drivers}
    - Tỷ lệ đội xe cùng bẻ lái: {telemetry.fleet_deviation_ratio * 100:.1f}% ({telemetry.high_dev_trips}/{telemetry.unique_trips} chuyến)
-   - Vận tốc trung bình: {telemetry.avg_speed_kmh} km/h
-   - Độ lệch trung bình: {telemetry.avg_deviation_m}m
+   - Vận tốc trung bình: {telemetry.avg_speed_kmh} km/h | Độ lệch TB: {telemetry.avg_deviation_m}m
 
-2. Thời tiết (Mốc thời gian: {weather_time_str}):
+2. Thời tiết (Mốc {weather_time_str}):
    - Tình trạng: {weather.description if weather else 'Không có dữ liệu'}
-   - Nhiệt độ: {weather.temperature if weather else 'N/A'} °C
-   - Lượng mưa: {weather.rain_mm if weather else 0} mm/h
-   - Sức gió: {weather.wind_speed if weather else 'N/A'} km/h
+   - Nhiệt độ: {weather.temperature if weather else 'N/A'} °C | Mưa: {weather.rain_mm if weather else 0} mm/h | Gió: {weather.wind_speed if weather else 'N/A'} km/h
 
 3. Tin tức & Sự kiện thực tế:
 """
@@ -65,6 +66,22 @@ Thời điểm chuyến xe/sự kiện: {evidence.target_time_str}
             user_prompt += f"   [{idx}] {item.title} ({item.source}) - {item.snippet}\n"
     else:
         user_prompt += "   (Không có bài báo ghi nhận sự kiện bất thường)\n"
+
+    user_prompt += f"""
+4. Lộ trình phụ OSRM:
+   - Trạng thái: {osrm_alts.summary if osrm_alts else 'N/A'}
+   - Phân loại: {osrm_alts.route_classification if osrm_alts else 'STANDARD'} (Chênh lệch: {osrm_alts.distance_diff_meters if osrm_alts else 0}m, Tiết kiệm: {osrm_alts.best_time_saving_sec if osrm_alts else 0}s)
+
+5. Hồ sơ & Uy tín 30 ngày của Tài xế:
+   - ID Tài xế: {driver_prof.driver_id if driver_prof else 'N/A'}
+   - Tỷ lệ tuân thủ tuyến 30 ngày: {driver_prof.compliance_rate_30d * 100:.1f}% if driver_prof else '95.0%' ({driver_prof.deviated_trips_30d if driver_prof else 0}/{driver_prof.total_trips_30d if driver_prof else 0} chuyến lệch)
+   - Mức độ uy tín: {driver_prof.reputation_level if driver_prof else 'EXCELLENT'}
+
+6. Mật độ & Vận tốc Giao thông:
+   - Vận tốc cơ sở: {traffic.baseline_speed_kmh if traffic else 40} km/h | Vận tốc hiện tại: {traffic.current_speed_kmh if traffic else 40} km/h
+   - Tỷ lệ sụt giảm tốc độ: {(traffic.speed_drop_ratio * 100):.1f}% if traffic else '0%'
+   - Trạng thái giao thông: {traffic.traffic_state if traffic else 'CLEAR'}
+"""
 
     # Option 1: Call Groq API if GROQ_API_KEY is present (Ultra fast LLaMA 3.3 70B)
     if GROQ_API_KEY:
@@ -141,40 +158,44 @@ def _rule_based_fallback(h3_index: str, evidence: Evidence) -> DiagnosisResult:
     telemetry = evidence.fleet_telemetry
     weather = evidence.weather
     news = evidence.news
+    osrm_alts = evidence.osrm_alternatives
+    driver_prof = evidence.driver_profile
+    traffic = evidence.traffic_speed
 
     rain = weather.rain_mm if (weather and weather.rain_mm is not None) else 0.0
     ratio = telemetry.fleet_deviation_ratio
     has_news = len(news) > 0
+    is_gridlock = traffic and traffic.traffic_state == "SEVERE_GRIDLOCK"
+    is_shortcut = osrm_alts and osrm_alts.route_classification == "OPTIMIZED_SHORTCUT"
 
-    if (rain >= 10.0 or has_news):
+    if rain >= 10.0 or has_news or is_gridlock or is_shortcut:
         risk = "SAFE_FORCE_MAJEURE"
-        conf = 0.92
+        conf = 0.94
         reasons = []
         if rain >= 10.0:
             reasons.append(f"mưa lớn ({rain}mm/h)")
         if has_news:
-            reasons.append(f"tin tức giao thông '{news[0].title[:40]}...'")
+            reasons.append(f"tin tức giao thông '{news[0].title[:35]}...'")
+        if is_gridlock:
+            reasons.append(f"kẹt xe nghiêm trọng (tốc độ giảm {round((traffic.speed_drop_ratio if traffic else 0.8)*100)}%)")
+        if is_shortcut:
+            reasons.append("lộ trình rẽ là đường tắt tối ưu thời gian di chuyển hơn")
 
         reason_str = ", ".join(reasons)
-        summary = f"Tài xế né tránh hợp lý do {reason_str} tại {evidence.location_name}. Đây là tình huống bất khả kháng."
+        summary = f"Tài xế né tránh hợp lý tại {evidence.location_name} do {reason_str}."
         rec = "Tạm thời cập nhật OSRM bypass đoạn đường này. KHÔNG phạt tài xế."
-    elif ratio >= 0.5:
+    elif (osrm_alts and osrm_alts.route_classification == "INFLATED_DETOUR") or (driver_prof and driver_prof.reputation_level == "HIGH_RISK" and ratio >= 0.4):
         risk = "FRAUD_ALERT"
-        conf = 0.88
+        conf = 0.90
         pct = round(ratio * 100, 1)
-        summary = f"Phát hiện tỷ lệ bẻ lái cao bất thường ({pct}% · {telemetry.high_dev_trips}/{telemetry.unique_trips} chuyến) tại {evidence.location_name} nhưng thời tiết khô ráo, không ghi nhận ngập lụt hay kẹt xe."
-        rec = "Gửi thông báo cảnh báo kiểm tra hành vi bẻ lái của các tài xế trong khu vực này."
-    elif ratio >= 0.2:
+        summary = f"Cảnh báo nghi vấn gian lận tại {evidence.location_name}: Phát hiện rẽ đường lòng vòng kéo dài quãng đường ({pct}% bẻ lái) trong điều kiện giao thông khô ráo bình thường."
+        rec = "Gửi thông báo yêu cầu tài xế xác nhận lý do bẻ lái và kiểm tra cước chuyến đi."
+    else:
         risk = "SUSPICIOUS"
         conf = 0.75
         pct = round(ratio * 100, 1)
-        summary = f"Ghi nhận {telemetry.high_dev_trips} chuyến bẻ lái ({pct}%) tại {evidence.location_name} chưa rõ nguyên nhân. Thời tiết bình thường."
+        summary = f"Ghi nhận {telemetry.high_dev_trips} chuyến bẻ lái ({pct}%) tại {evidence.location_name} chưa rõ nguyên nhân. Thời tiết và giao thông bình thường."
         rec = "Theo dõi thêm biến động trong 30 phút tới."
-    else:
-        risk = "SUSPICIOUS"
-        conf = 0.70
-        summary = f"Khu vực {evidence.location_name} ghi nhận ít bẻ lái ({telemetry.high_dev_trips}/{telemetry.unique_trips} chuyến). Thời tiết ráo mát."
-        rec = "Không cần xử lý."
 
     return DiagnosisResult(
         h3_index=h3_index,

@@ -298,6 +298,13 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps) {
             const weatherStr = data.evidence?.weather ? `🌡️ ${data.evidence.weather.temperature ?? 'N/A'}°C · 🌧️ ${data.evidence.weather.rain_mm ?? 0}mm/h (${data.evidence.weather.description})` : 'Thời tiết: Không khả dụng';
             const locationStr = data.evidence?.location_name || '';
 
+            const osrmSummary = data.evidence?.osrm_alternatives?.summary || 'Đang dùng lộ trình tiêu chuẩn';
+            const osrmClass = data.evidence?.osrm_alternatives?.route_classification === 'OPTIMIZED_SHORTCUT' ? '🟢 Đường tắt tối ưu' : data.evidence?.osrm_alternatives?.route_classification === 'INFLATED_DETOUR' ? '🔴 Rẽ lòng vòng' : '🔵 Lộ trình chuẩn';
+
+            const driverRep = data.evidence?.driver_profile ? `👤 Uy tín 30 ngày: <b>${(data.evidence.driver_profile.compliance_rate_30d * 100).toFixed(1)}% chuẩn tuyến</b> (${data.evidence.driver_profile.reputation_level})` : '';
+
+            const trafficState = data.evidence?.traffic_speed ? `🚦 Giao thông: <b>${data.evidence.traffic_speed.traffic_state === 'SEVERE_GRIDLOCK' ? '🔴 Kẹt xe nghiêm trọng' : data.evidence.traffic_speed.traffic_state === 'MODERATE_SLOW' ? '🟡 Chậm cục bộ' : '🟢 Thông thoáng'}</b> (${data.evidence.traffic_speed.current_speed_kmh}/${data.evidence.traffic_speed.baseline_speed_kmh} km/h)` : '';
+
             let newsHtml = '';
             if (data.evidence?.news && data.evidence.news.length > 0) {
               newsHtml = `
@@ -319,6 +326,9 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps) {
                 ${timeLabel ? `<div style="color:#1565c0;margin-bottom:3px">${timeLabel}</div>` : ''}
                 <div>${weatherStr}</div>
                 <div>📊 Đội xe cùng rẽ: <b>${((data.evidence?.fleet_telemetry?.fleet_deviation_ratio || 0) * 100).toFixed(1)}%</b></div>
+                <div style="margin-top:3px">🔀 OSRM: <b>${osrmClass}</b> (${osrmSummary})</div>
+                ${driverRep ? `<div style="margin-top:3px">${driverRep}</div>` : ''}
+                ${trafficState ? `<div style="margin-top:3px">${trafficState}</div>` : ''}
                 ${newsHtml}
               </div>
               <div style="color:#2e7d32;font-weight:600;font-size:10.5px">💡 Đề xuất: ${data.recommendation}</div>
