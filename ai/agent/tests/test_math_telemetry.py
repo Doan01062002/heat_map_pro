@@ -38,12 +38,12 @@ def test_wilson_score_interval():
     print("✅ PASSED: Wilson Score Interval Test\n")
 
 async def test_dynamic_road_thresholds():
-    print("------------ [TEST 3] Dynamic Road-Class Thresholds (Ngưỡng Động theo Loại Đường) ------------")
+    print("------------ [TEST 3] Dynamic AASHTO Road-Width Thresholds (Ngưỡng Động 3 Lớp) ------------")
     # Test Porto location
     threshold, road_class = await fetch_road_class_threshold(41.14780, -8.61071)
-    print(f"  • Tọa độ Porto (41.1478, -8.6107): Cấp đường '{road_class}' -> Ngưỡng mét lệch: {threshold}m")
-    assert threshold in [50.0, 150.0, 350.0], f"Invalid threshold {threshold}"
-    print("✅ PASSED: Dynamic Road Threshold Test\n")
+    print(f"  • Tọa độ Porto (41.1478, -8.6107): Cấp đường '{road_class}' -> Ngưỡng mét lệch tính theo AASHTO: {threshold}m")
+    assert threshold >= 20.0 and threshold <= 200.0, f"Invalid threshold {threshold}"
+    print("✅ PASSED: Scientific AASHTO Dynamic Road Threshold Test\n")
 
 def main():
     print("==========================================================================")
