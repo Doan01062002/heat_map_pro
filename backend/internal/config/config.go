@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config holds all application configuration.
@@ -58,21 +59,23 @@ func (c *Config) DSN() string {
 	)
 }
 
-// Load reads configuration from environment variables.
+// Load reads configuration from environment variables (loading .env if present).
 // Returns an error if a required variable is missing or invalid.
 func Load() (*Config, error) {
+	loadDotEnv()
+
 	cfg := &Config{
 		AppEnv:                   getEnv("APP_ENV", "development"),
 		LogLevel:                 getEnv("LOG_LEVEL", "debug"),
 		BackendHost:              getEnv("BACKEND_HOST", "0.0.0.0"),
 		BackendPort:              getEnvInt("BACKEND_PORT", 8080),
-		OSRMURL:                  getEnv("OSRM_URL", "http://localhost:5000"),
+		OSRMURL:                  getEnv("OSRM_URL", "http://127.0.0.1:5000"),
 		OSRMMatchTimeoutMS:       getEnvInt("OSRM_MATCH_TIMEOUT_MS", 500),
-		RedisAddr:                getEnv("REDIS_ADDR", "localhost:6379"),
+		RedisAddr:                getEnv("REDIS_ADDR", "127.0.0.1:6379"),
 		RedisPassword:            getEnv("REDIS_PASSWORD", ""),
 		RedisDB:                  getEnvInt("REDIS_DB", 0),
 		RedisChannel:             getEnv("REDIS_CHANNEL", "heatmap:updates"),
-		PostgresHost:             getEnv("POSTGRES_HOST", "localhost"),
+		PostgresHost:             getEnv("POSTGRES_HOST", "127.0.0.1"),
 		PostgresPort:             getEnvInt("POSTGRES_PORT", 5432),
 		PostgresUser:             getEnv("POSTGRES_USER", "heatmap"),
 		PostgresPassword:         getEnv("POSTGRES_PASSWORD", "heatmap_secret_2024"),
@@ -129,4 +132,31 @@ func getEnvFloat(key string, defaultVal float64) float64 {
 		return defaultVal
 	}
 	return f
+}
+
+// loadDotEnv reads .env file from working dir or parent dir if present.
+func loadDotEnv() {
+	paths := []string{".env", "../.env", "../../.env"}
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		lines := strings.Split(string(data), "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				k := strings.TrimSpace(parts[0])
+				v := strings.TrimSpace(parts[1])
+				if os.Getenv(k) == "" {
+					os.Setenv(k, v)
+				}
+			}
+		}
+		break
+	}
 }

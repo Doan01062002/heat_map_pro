@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -156,6 +157,33 @@ func main() {
 
 	// Hourly avoidance statistics for 24-hour chart
 	mux.HandleFunc("GET /api/hourly-stats", pgWriter.HandleHourlyStatsQuery)
+
+	// AI Agent Investigation Proxy
+	mux.HandleFunc("POST /api/ai/investigate", func(w http.ResponseWriter, r *http.Request) {
+		aiURL := os.Getenv("AI_AGENT_URL")
+		if aiURL == "" {
+			aiURL = "http://localhost:8090"
+		}
+		proxyReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, aiURL+"/investigate", r.Body)
+		if err != nil {
+			http.Error(w, `{"error":"failed to create proxy request"}`, http.StatusInternalServerError)
+			return
+		}
+		proxyReq.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Do(proxyReq)
+		if err != nil {
+			slog.Error("ai agent service call failed", "error", err, "url", aiURL)
+			http.Error(w, `{"error":"AI service unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		defer resp.Body.Close()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	})
 
 	// WebSocket: Driver GPS ingestion
 	mux.HandleFunc("/ws/driver", ingestHandler.HandleWebSocket)

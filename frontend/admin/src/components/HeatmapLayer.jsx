@@ -14,7 +14,7 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
  * @param {number} [hintDev]   optional deviation hint (shown before query returns)
  */
 async function showRoadStatsPopup(map, popupLngLat, queryLat, queryLng, hintDev) {
-  const zoom   = map.getZoom();
+  const zoom = map.getZoom();
   const radius = zoom < 10 ? 300 : zoom < 12 ? 200 : zoom < 14 ? 150 : 100;
 
   const PopupClass = map._maplibregl?.Popup || window.maplibregl?.Popup;
@@ -24,7 +24,7 @@ async function showRoadStatsPopup(map, popupLngLat, queryLat, queryLng, hintDev)
     .setHTML(`
       <div style="font-family:Inter,sans-serif;color:#333;font-size:13px;line-height:1.6">
         <div style="font-weight:700;margin-bottom:4px">📍 Đang tải thống kê…</div>
-        ${hintDev != null ? `<div style="color:#e65100;font-size:11px">Độ lệch: ${hintDev >= 1000 ? (hintDev/1000).toFixed(1)+' km' : Math.round(hintDev)+' m'}</div>` : ''}
+        ${hintDev != null ? `<div style="color:#e65100;font-size:11px">Độ lệch: ${hintDev >= 1000 ? (hintDev / 1000).toFixed(1) + ' km' : Math.round(hintDev) + ' m'}</div>` : ''}
         <div style="color:#aaa;font-size:11px">${queryLat.toFixed(5)}, ${queryLng.toFixed(5)}</div>
       </div>
     `)
@@ -52,12 +52,12 @@ async function showRoadStatsPopup(map, popupLngLat, queryLat, queryLng, hintDev)
       return;
     }
 
-    const fmtDev = v => v >= 1000 ? `${(v/1000).toFixed(1)} km` : `${Math.round(v)} m`;
-    const ratio  = d.avoid_ratio.toFixed(1);
+    const fmtDev = v => v >= 1000 ? `${(v / 1000).toFixed(1)} km` : `${Math.round(v)} m`;
+    const ratio = d.avoid_ratio.toFixed(1);
     const iColor = d.avoid_ratio < 20 ? '#00b894'
-                 : d.avoid_ratio < 50 ? '#fdcb6e'
-                 : d.avoid_ratio < 75 ? '#e17055' : '#d63031';
-    const barW   = Math.min(100, Math.round(d.avoid_ratio));
+      : d.avoid_ratio < 50 ? '#fdcb6e'
+        : d.avoid_ratio < 75 ? '#e17055' : '#d63031';
+    const barW = Math.min(100, Math.round(d.avoid_ratio));
 
     new PopupClass({ offset: 12, maxWidth: '285px', closeButton: true })
       .setLngLat(popupLngLat)
@@ -174,18 +174,18 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps) {
     }
     loading.remove();
 
-    const fmtDev = v => v >= 1000 ? `${(v/1000).toFixed(1)} km` : `${Math.round(v)} m`;
+    const fmtDev = v => v >= 1000 ? `${(v / 1000).toFixed(1)} km` : `${Math.round(v)} m`;
 
-    const totalTrips   = dbStats?.unique_trips ?? 0;
-    const drivers      = dbStats?.unique_drivers ?? 0;
-    const avoidRatio   = dbStats?.avoid_ratio ?? 0;
-    const normalTrips  = dbStats?.normal_trips ?? 0;
+    const totalTrips = dbStats?.unique_trips ?? 0;
+    const drivers = dbStats?.unique_drivers ?? 0;
+    const avoidRatio = dbStats?.avoid_ratio ?? 0;
+    const normalTrips = dbStats?.normal_trips ?? 0;
     const highDevTrips = dbStats?.high_dev_trips ?? 0;
-    const avgDev       = dbStats?.avg_deviation ?? f.avgDev ?? 0;
-    const maxDev       = dbStats?.max_deviation ?? f.maxDev ?? 0;
+    const avgDev = dbStats?.avg_deviation ?? f.avgDev ?? 0;
+    const maxDev = dbStats?.max_deviation ?? f.maxDev ?? 0;
 
     const riskLabel = avoidRatio > 50 ? '🔴 Rủi ro Bẻ lái Cao' : avoidRatio > 20 ? '🟡 Cảnh báo Né tránh' : '🟢 An toàn (Đúng tuyến)';
-    const riskBg    = avoidRatio > 50 ? '#ffebee' : avoidRatio > 20 ? '#fff8e1' : '#e8f5e9';
+    const riskBg = avoidRatio > 50 ? '#ffebee' : avoidRatio > 20 ? '#fff8e1' : '#e8f5e9';
     const riskColor = avoidRatio > 50 ? '#c62828' : avoidRatio > 20 ? '#f57f17' : '#2e7d32';
 
     new PopupClass({ offset: 12, maxWidth: '315px', closeButton: true })
@@ -249,9 +249,89 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps) {
           <div style="margin-top:6px;color:#aaa;font-size:9.5px">
             📌 Tọa độ tâm cell: ${centerLat.toFixed(5)}, ${centerLng.toFixed(5)}
           </div>
+
+          <button id="ai-investigate-btn-${f.h3Index}" style="margin-top:10px;width:100%;background:linear-gradient(135deg,#6c63ff,#4834d4);color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;box-shadow:0 2px 8px rgba(108,99,255,0.3);transition:all .2s">
+            <span>AI Chẩn Đoán Thực Tế</span>
+          </button>
+          <div id="ai-result-box-${f.h3Index}" style="display:none;margin-top:10px;background:#f8f9fa;border:1px solid #e0e0e0;border-radius:8px;padding:10px;font-size:11px;color:#222"></div>
         </div>
       `)
       .addTo(map);
+
+    // Attach click listener for AI Agent Investigation button
+    setTimeout(() => {
+      const btn = document.getElementById(`ai-investigate-btn-${f.h3Index}`);
+      const box = document.getElementById(`ai-result-box-${f.h3Index}`);
+
+      if (btn && box) {
+        btn.onclick = async () => {
+          btn.disabled = true;
+          btn.innerHTML = '<span>⏳ Agent đang thu thập bằng chứng...</span>';
+          btn.style.opacity = '0.7';
+
+          try {
+            const targetTimeMs = dbStats?.created_at ? new Date(dbStats.created_at).getTime() : (f.created_at || (points && points.length > 0 ? (points[0].created_at || 1372694282000) : null));
+
+            const res = await fetch(`${API_URL}/api/ai/investigate`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                h3_index: f.h3Index,
+                lat: centerLat,
+                lng: centerLng,
+                time_window_minutes: 60,
+                timestamp_ms: targetTimeMs,
+              }),
+            });
+
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+
+            btn.style.display = 'none';
+            box.style.display = 'block';
+
+            const riskBg = data.risk_level === 'SAFE_FORCE_MAJEURE' ? '#e8f5e9' : data.risk_level === 'SUSPICIOUS' ? '#fff8e1' : '#ffebee';
+            const riskColor = data.risk_level === 'SAFE_FORCE_MAJEURE' ? '#2e7d32' : data.risk_level === 'SUSPICIOUS' ? '#f57f17' : '#c62828';
+            const riskLabel = data.risk_level === 'SAFE_FORCE_MAJEURE' ? '🟢 BẤT KHẢ KHÁNG (An toàn)' : data.risk_level === 'SUSPICIOUS' ? '🟡 CẦN THEO DÕI' : '🔴 CẢNH BÁO GIAN LẬN';
+
+            const timeLabel = data.evidence?.weather?.weather_time ? `🕒 Mốc thời gian: <b>${data.evidence.weather.weather_time}</b>` : '';
+            const weatherStr = data.evidence?.weather ? `🌡️ ${data.evidence.weather.temperature ?? 'N/A'}°C · 🌧️ ${data.evidence.weather.rain_mm ?? 0}mm/h (${data.evidence.weather.description})` : 'Thời tiết: Không khả dụng';
+            const locationStr = data.evidence?.location_name || '';
+
+            let newsHtml = '';
+            if (data.evidence?.news && data.evidence.news.length > 0) {
+              newsHtml = `
+                <div style="margin-top:6px;padding-top:6px;border-top:1px dashed #ccc">
+                  <div style="font-weight:700;color:#1565c0;margin-bottom:2px">📰 Tin tức sự kiện:</div>
+                  ${data.evidence.news.map(n => `<div style="margin-bottom:3px"><b>• ${n.title}</b> <span style="color:#888">(${n.source})</span></div>`).join('')}
+                </div>
+              `;
+            }
+
+            box.innerHTML = `
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                <span style="background:${riskBg};color:${riskColor};padding:2px 8px;border-radius:10px;font-weight:700;font-size:10.5px">${riskLabel}</span>
+                <span style="color:#666;font-size:10px">Độ tin cậy: ${(data.confidence * 100).toFixed(0)}%</span>
+              </div>
+              <div style="font-weight:700;color:#1a237e;margin-bottom:4px;font-size:11.5px">📍 ${locationStr}</div>
+              <div style="color:#333;margin-bottom:6px;line-height:1.4"><b>🧠 Chẩn đoán:</b> ${data.summary}</div>
+              <div style="background:#fff;padding:6px;border-radius:6px;border:1px solid #e0e0e0;margin-bottom:6px;color:#555">
+                ${timeLabel ? `<div style="color:#1565c0;margin-bottom:3px">${timeLabel}</div>` : ''}
+                <div>${weatherStr}</div>
+                <div>📊 Đội xe cùng rẽ: <b>${((data.evidence?.fleet_telemetry?.fleet_deviation_ratio || 0) * 100).toFixed(1)}%</b></div>
+                ${newsHtml}
+              </div>
+              <div style="color:#2e7d32;font-weight:600;font-size:10.5px">💡 Đề xuất: ${data.recommendation}</div>
+            `;
+          } catch (err) {
+            btn.disabled = false;
+            btn.innerHTML = '<span>⚠️ AI bận. Bấm để thử lại</span>';
+            btn.style.opacity = '1';
+            console.warn('[AI Investigate Error]', err);
+          }
+        };
+      }
+    }, 100);
   } catch (err) {
     loading.remove();
   }
@@ -272,11 +352,11 @@ export default function HeatmapLayer({
   showHeatmap = true,
   show3DH3Grid = true,
 }) {
-  const initialized   = useRef(false);
-  const clickHandler  = useRef(null);
-  const snapCache     = useRef(new Map()); // key: "lng,lat" → snapped [lng,lat]
-  const snapPending   = useRef(false);
-  const show3DH3Ref   = useRef(show3DH3Grid);
+  const initialized = useRef(false);
+  const clickHandler = useRef(null);
+  const snapCache = useRef(new Map()); // key: "lng,lat" → snapped [lng,lat]
+  const snapPending = useRef(false);
+  const show3DH3Ref = useRef(show3DH3Grid);
 
   // Keep show3DH3Ref in sync
   useEffect(() => {
@@ -327,7 +407,7 @@ export default function HeatmapLayer({
           'heatmap-radius': ['interpolate', ['linear'], ['zoom'],
             4, 3, 6, 5, 8, 7, 10, 11, 12, 16, 14, 22, 16, 30, 18, 40],
           'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'],
-            0,    'rgba(0,0,0,0)',
+            0, 'rgba(0,0,0,0)',
             0.05, 'rgba(0,200,120,0)',
             0.15, 'rgba(0,220,80,0.6)',
             0.30, 'rgba(100,230,0,0.7)',
@@ -335,7 +415,7 @@ export default function HeatmapLayer({
             0.68, 'rgba(255,170,0,0.82)',
             0.84, 'rgba(255,70,0,0.90)',
             0.95, 'rgba(255,15,0,0.96)',
-            1.0,  'rgba(200,0,0,1.0)',
+            1.0, 'rgba(200,0,0,1.0)',
           ],
           'heatmap-opacity': 0.82,
         },
@@ -413,8 +493,8 @@ export default function HeatmapLayer({
             geometry: { type: 'Point', coordinates: snapCache.current.get(p.key) },
             properties: {
               deviation: p.deviation,
-              orig_lng:  p.lng,   // original GPS lng (used for road-stats query)
-              orig_lat:  p.lat,   // original GPS lat
+              orig_lng: p.lng,   // original GPS lng (used for road-stats query)
+              orig_lat: p.lat,   // original GPS lat
             },
           }));
 
@@ -431,7 +511,7 @@ export default function HeatmapLayer({
         e.originalEvent.stopPropagation();
         if (!e.features?.length) return;
 
-        const f   = e.features[0];
+        const f = e.features[0];
         const dev = f.properties.deviation;
         const lat = f.properties.orig_lat ?? e.lngLat.lat;
         const lng = f.properties.orig_lng ?? e.lngLat.lng;
@@ -450,7 +530,7 @@ export default function HeatmapLayer({
         }
         // Skip if clicking directly on a snapped dot (handled by dot-specific handler)
         if (map.getLayer('hm-snapped-dots') &&
-            map.queryRenderedFeatures(e.point, { layers: ['hm-snapped-dots'] }).length > 0) return;
+          map.queryRenderedFeatures(e.point, { layers: ['hm-snapped-dots'] }).length > 0) return;
 
         const { lng, lat } = e.lngLat;
         await showRoadStatsPopup(map, e.lngLat, lat, lng);
@@ -485,10 +565,9 @@ export default function HeatmapLayer({
     if (!points || points.length === 0) return { type: 'FeatureCollection', features: [] };
 
     // Adaptive Resolution based on point density:
-    // >100k points (e.g. Porto 386k dataset): Res 12 (~25m) to prevent WebGL memory overflow
-    // 30k - 100k points: Res 13 (~9m)
+    // >30k points (e.g. Porto 386k dataset): Res 13 (~9m)
     // <30k points (e.g. driver trips / zoomed area): Res 14 (~3m) for street precision
-    const resLevel = points.length > 100000 ? 12 : points.length > 30000 ? 13 : 14;
+    const resLevel = points.length > 30000 ? 13 : 14;
 
     const h3CellMap = new Map();
     let maxAvoidTrips = 1;
@@ -498,8 +577,8 @@ export default function HeatmapLayer({
       if (!pt.lat || !pt.lng) continue;
 
       const cell = latLngToCell(pt.lat, pt.lng, resLevel);
-      const isAvoidance = (pt.deviation || 0) > 50;
-      const tripId = pt.trip_id || `pt-${i}`;
+      const isAvoidance = (pt.deviation || 0) > 150;
+      const tripId = pt.trip_id || (pt.lat && pt.lng ? `loc-${pt.lat.toFixed(4)},${pt.lng.toFixed(4)}` : `pt-${i}`);
       const item = h3CellMap.get(cell);
 
       if (!item) {
@@ -534,7 +613,7 @@ export default function HeatmapLayer({
         if (!boundary || boundary.length === 0) continue;
 
         const avoidTripsCount = item.avoidTripsSet ? item.avoidTripsSet.size : 0;
-        // Ratio based strictly on SỐ CHUYẾN XE NÉ TRÁNH THỰC TẾ (Unique Avoidance Trips)
+        // Ratio strictly based on UNIQUE AVOIDANCE TRIPS (>150m threshold)
         const ratio = maxAvoidTrips > 0 ? (avoidTripsCount / maxAvoidTrips) : 0;
         const avgDev = Math.round(item.totalDev / item.count);
 
@@ -547,12 +626,12 @@ export default function HeatmapLayer({
             avoidTripsCount: avoidTripsCount,
             ratio: ratio,
             res: resLevel,
-            height: Math.max(4, Math.round(ratio * 140)), // Extrusion height strictly proportional to SỐ CHUYẾN NÉ TRÁNH (4m to 140m)
+            height: Math.max(10, Math.round(ratio * 220)), // Extrusion height strictly proportional to SỐ CHUYẾN NÉ TRÁNH (10m to 220m)
             avgDev: avgDev,
             maxDev: Math.round(item.maxDev),
           },
         });
-      } catch (_) {}
+      } catch (_) { }
     }
 
     return { type: 'FeatureCollection', features };
@@ -563,7 +642,7 @@ export default function HeatmapLayer({
     if (!map) return;
 
     const sourceId = 'hm-3d-h3-src';
-    const layerId  = 'hm-3d-h3-extrusion';
+    const layerId = 'hm-3d-h3-extrusion';
 
     if (!map.getSource(sourceId)) {
       map.addSource(sourceId, {
@@ -624,18 +703,18 @@ export default function HeatmapLayer({
     if (!map) return;
 
     // Cleanup previous trip layers
-    ['trip-planned-case','trip-planned','trip-actual-case','trip-actual',
-     'trip-overlap-case','trip-overlap','trip-pts','trip-markers',
-    ].forEach(id => { try { if (map.getLayer(id)) map.removeLayer(id); } catch (_) {} });
-    ['trip-planned-src','trip-actual-src','trip-pts-src',
-     'trip-overlap-src','trip-markers-src',
-    ].forEach(id => { try { if (map.getSource(id)) map.removeSource(id); } catch (_) {} });
+    ['trip-planned-case', 'trip-planned', 'trip-actual-case', 'trip-actual',
+      'trip-overlap-case', 'trip-overlap', 'trip-pts', 'trip-markers',
+    ].forEach(id => { try { if (map.getLayer(id)) map.removeLayer(id); } catch (_) { } });
+    ['trip-planned-src', 'trip-actual-src', 'trip-pts-src',
+      'trip-overlap-src', 'trip-markers-src',
+    ].forEach(id => { try { if (map.getSource(id)) map.removeSource(id); } catch (_) { } });
 
     if (!selectedTrip) return;
     const { coords, matchedRoute, plannedRoute } = selectedTrip;
     if (!coords || coords.length < 2) return;
 
-    const actualCoords  = matchedRoute || coords;
+    const actualCoords = matchedRoute || coords;
     const plannedCoords = plannedRoute || [coords[0], coords[coords.length - 1]];
 
     // ── Overlap detection ────────────────────────────────────────────────────
@@ -643,17 +722,17 @@ export default function HeatmapLayer({
     function ptSegDist(p, a, b) {
       const dx = b[0] - a[0], dy = b[1] - a[1];
       if (dx === 0 && dy === 0) {
-        const ex = p[0]-a[0], ey = p[1]-a[1];
-        return Math.sqrt(ex*ex + ey*ey) * 111320;
+        const ex = p[0] - a[0], ey = p[1] - a[1];
+        return Math.sqrt(ex * ex + ey * ey) * 111320;
       }
-      const t = Math.max(0, Math.min(1, ((p[0]-a[0])*dx + (p[1]-a[1])*dy) / (dx*dx + dy*dy)));
-      const ex = p[0] - (a[0]+t*dx), ey = p[1] - (a[1]+t*dy);
-      return Math.sqrt(ex*ex + ey*ey) * 111320; // rough meters
+      const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy)));
+      const ex = p[0] - (a[0] + t * dx), ey = p[1] - (a[1] + t * dy);
+      return Math.sqrt(ex * ex + ey * ey) * 111320; // rough meters
     }
     function minDistToRoute(pt, route) {
       let min = Infinity;
       for (let j = 0; j < route.length - 1; j++) {
-        const d = ptSegDist(pt, route[j], route[j+1]);
+        const d = ptSegDist(pt, route[j], route[j + 1]);
         if (d < min) min = d;
       }
       return min;
@@ -712,39 +791,46 @@ export default function HeatmapLayer({
     });
 
     // ── Planned route: blue dashed ────────────────────────────────────────────
-    map.addLayer({ id: 'trip-planned-case', type: 'line', source: 'trip-planned-src',
+    map.addLayer({
+      id: 'trip-planned-case', type: 'line', source: 'trip-planned-src',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': '#fff', 'line-width': 8, 'line-opacity': 0.15 },
     });
-    map.addLayer({ id: 'trip-planned', type: 'line', source: 'trip-planned-src',
+    map.addLayer({
+      id: 'trip-planned', type: 'line', source: 'trip-planned-src',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': '#29b6f6', 'line-width': 4, 'line-dasharray': [5, 4], 'line-opacity': 0.9 },
     });
 
     // ── Actual route: orange ──────────────────────────────────────────────────
-    map.addLayer({ id: 'trip-actual-case', type: 'line', source: 'trip-actual-src',
+    map.addLayer({
+      id: 'trip-actual-case', type: 'line', source: 'trip-actual-src',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': '#000', 'line-width': 7, 'line-opacity': 0.35 },
     });
-    map.addLayer({ id: 'trip-actual', type: 'line', source: 'trip-actual-src',
+    map.addLayer({
+      id: 'trip-actual', type: 'line', source: 'trip-actual-src',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': '#ff6b35', 'line-width': 4, 'line-opacity': 0.95 },
     });
 
     // ── Overlap segments: purple ──────────────────────────────────────────────
     if (overlapSegments.length > 0) {
-      map.addLayer({ id: 'trip-overlap-case', type: 'line', source: 'trip-overlap-src',
+      map.addLayer({
+        id: 'trip-overlap-case', type: 'line', source: 'trip-overlap-src',
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-color': '#000', 'line-width': 9, 'line-opacity': 0.3 },
       });
-      map.addLayer({ id: 'trip-overlap', type: 'line', source: 'trip-overlap-src',
+      map.addLayer({
+        id: 'trip-overlap', type: 'line', source: 'trip-overlap-src',
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-color': '#e040fb', 'line-width': 5, 'line-opacity': 1.0 },
       });
     }
 
     // ── Raw GPS dots (visible at zoom ≥ 13) ──────────────────────────────────
-    map.addLayer({ id: 'trip-pts', type: 'circle', source: 'trip-pts-src', minzoom: 13,
+    map.addLayer({
+      id: 'trip-pts', type: 'circle', source: 'trip-pts-src', minzoom: 13,
       paint: {
         'circle-radius': ['interpolate', ['linear'], ['zoom'], 13, 2, 17, 4],
         'circle-color': '#fff', 'circle-opacity': 0.65,
@@ -753,13 +839,14 @@ export default function HeatmapLayer({
     });
 
     // ── Start / End markers ───────────────────────────────────────────────────
-    map.addLayer({ id: 'trip-markers', type: 'circle', source: 'trip-markers-src',
+    map.addLayer({
+      id: 'trip-markers', type: 'circle', source: 'trip-markers-src',
       paint: {
         'circle-radius': 10,
         'circle-color': [
           'match', ['get', 'role'],
           'start', '#00e676',  // bright green = start
-          'end',   '#ff1744',  // bright red = end
+          'end', '#ff1744',  // bright red = end
           '#fff'
         ],
         'circle-stroke-width': 3,
@@ -769,8 +856,8 @@ export default function HeatmapLayer({
     });
 
     // Cursor changes
-    map.on('mouseenter', 'trip-actual',  () => { map.getCanvas().style.cursor = 'pointer'; });
-    map.on('mouseleave', 'trip-actual',  () => { map.getCanvas().style.cursor = ''; });
+    map.on('mouseenter', 'trip-actual', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'trip-actual', () => { map.getCanvas().style.cursor = ''; });
     map.on('mouseenter', 'trip-planned', () => { map.getCanvas().style.cursor = 'pointer'; });
     map.on('mouseleave', 'trip-planned', () => { map.getCanvas().style.cursor = ''; });
 
@@ -797,14 +884,14 @@ export default function HeatmapLayer({
     return () => {
       if (!map || !initialized.current) return;
       if (clickHandler.current) map.off('click', clickHandler.current);
-      ['hm-heat','hm-hover','hm-snapped-dots','hm-3d-h3-extrusion',
-        'trip-planned-case','trip-planned','trip-actual-case','trip-actual',
-        'trip-overlap-case','trip-overlap','trip-pts','trip-markers',
-      ].forEach(id => { try { if (map.getLayer(id)) map.removeLayer(id); } catch (_) {} });
-      ['hm-points','hm-snapped','hm-3d-h3-src',
-        'trip-planned-src','trip-actual-src','trip-overlap-src',
-        'trip-pts-src','trip-markers-src',
-      ].forEach(id => { try { if (map.getSource(id)) map.removeSource(id); } catch (_) {} });
+      ['hm-heat', 'hm-hover', 'hm-snapped-dots', 'hm-3d-h3-extrusion',
+        'trip-planned-case', 'trip-planned', 'trip-actual-case', 'trip-actual',
+        'trip-overlap-case', 'trip-overlap', 'trip-pts', 'trip-markers',
+      ].forEach(id => { try { if (map.getLayer(id)) map.removeLayer(id); } catch (_) { } });
+      ['hm-points', 'hm-snapped', 'hm-3d-h3-src',
+        'trip-planned-src', 'trip-actual-src', 'trip-overlap-src',
+        'trip-pts-src', 'trip-markers-src',
+      ].forEach(id => { try { if (map.getSource(id)) map.removeSource(id); } catch (_) { } });
       initialized.current = false;
     };
   }, [map]);
