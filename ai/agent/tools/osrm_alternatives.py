@@ -17,8 +17,7 @@ async def check_crowdsourced_local_shortcut(start_lat: float, start_lng: float) 
     query = """
         SELECT COUNT(DISTINCT trip_id)::INT AS trip_count
         FROM deviation_events
-        WHERE (latitude BETWEEN $1 AND $2) AND (longitude BETWEEN $3 AND $4)
-          AND created_at >= NOW() - INTERVAL '30 days';
+        WHERE (latitude BETWEEN $1 AND $2) AND (longitude BETWEEN $3 AND $4);
     """
     try:
         conn = await asyncpg.connect(POSTGRES_DSN, timeout=2.0)

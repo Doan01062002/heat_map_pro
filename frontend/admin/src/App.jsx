@@ -89,7 +89,13 @@ export default function App() {
         }
         if (Array.isArray(route) && route.length > 0) {
           route.forEach(([lng, lat]) => {
-            allPoints.push({ lat, lng, deviation: t.is_deviated ? 120 : 15 });
+            allPoints.push({
+              lat,
+              lng,
+              deviation: t.is_deviated ? (t.deviation_meters || 250) : 15,
+              trip_id: t.trip_id,
+              created_at: t.created_at,
+            });
           });
         }
       });

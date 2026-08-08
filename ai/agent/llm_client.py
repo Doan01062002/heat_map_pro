@@ -86,9 +86,9 @@ Thời điểm chuyến xe/sự kiện: {evidence.target_time_str}
    - Trạng thái: {osrm_alts.summary if osrm_alts else 'N/A'}
    - Phân loại: {osrm_alts.route_classification if osrm_alts else 'STANDARD'} (Chênh lệch: {osrm_alts.distance_diff_meters if osrm_alts else 0}m, Tiết kiệm: {osrm_alts.best_time_saving_sec if osrm_alts else 0}s)
 
-5. Hồ sơ & Uy tín 30 ngày của Tài xế:
+5. Hồ sơ & Uy tín toàn hệ thống của Tài xế:
    - ID Tài xế: {driver_prof.driver_id if driver_prof else 'N/A'}
-   - Tỷ lệ tuân thủ tuyến 30 ngày toàn hệ thống: {driver_prof.compliance_rate_30d * 100:.1f}% ({driver_prof.deviated_trips_30d if driver_prof else 0}/{driver_prof.total_trips_30d if driver_prof else 0} chuyến lệch)
+   - Tỷ lệ tuân thủ tuyến toàn hệ thống: {driver_prof.compliance_rate_30d * 100:.1f}% ({driver_prof.deviated_trips_30d if driver_prof else 0}/{driver_prof.total_trips_30d if driver_prof else 0} chuyến lệch)
    - Mức độ uy tín: {driver_prof.reputation_level if driver_prof else 'EXCELLENT'}
 
 6. Mật độ & Giới hạn Tốc độ Pháp lý:

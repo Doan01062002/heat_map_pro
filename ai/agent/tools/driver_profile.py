@@ -17,15 +17,14 @@ async def query_driver_profile(
     Uses Composite Index (idx_deviation_driver_created) for ultra-fast ~2ms execution.
     100% Zero Hardcoding.
     """
-    # 1. Query individual driver 30-day system-wide compliance
+    # 1. Query individual driver total system-wide compliance (entire dataset history)
     query_individual = """
         SELECT
             COUNT(*)::INT AS total_events,
             COUNT(DISTINCT trip_id)::INT AS total_trips,
             COUNT(DISTINCT CASE WHEN deviation_meters > 150 THEN trip_id END)::INT AS deviated_trips
         FROM deviation_events
-        WHERE driver_id = $1
-          AND created_at >= NOW() - INTERVAL '30 days';
+        WHERE driver_id = $1;
     """
 
     # 2. Query system-wide compliance of ONLY the specific drivers who appeared in target H3 cell/vicinity
@@ -38,14 +37,12 @@ async def query_driver_profile(
             SELECT DISTINCT driver_id
             FROM deviation_events
             WHERE (h3_index = $1 OR (latitude BETWEEN $2 AND $3 AND longitude BETWEEN $4 AND $5))
-              AND created_at >= NOW() - INTERVAL '30 days'
         )
         SELECT
             COUNT(DISTINCT d.trip_id)::INT AS total_trips,
             COUNT(DISTINCT CASE WHEN d.deviation_meters > 150 THEN d.trip_id END)::INT AS deviated_trips
         FROM deviation_events d
-        JOIN cell_drivers c ON d.driver_id = c.driver_id
-        WHERE d.created_at >= NOW() - INTERVAL '30 days';
+        JOIN cell_drivers c ON d.driver_id = c.driver_id;
     """
 
     # 3. Dynamic System-wide Network Baseline Query (Zero hardcoding fallback)
@@ -53,8 +50,7 @@ async def query_driver_profile(
         SELECT
             COUNT(DISTINCT trip_id)::INT AS total_trips,
             COUNT(DISTINCT CASE WHEN deviation_meters > 150 THEN trip_id END)::INT AS deviated_trips
-        FROM deviation_events
-        WHERE created_at >= NOW() - INTERVAL '30 days';
+        FROM deviation_events;
     """
 
     try:

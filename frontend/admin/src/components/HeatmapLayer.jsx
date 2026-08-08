@@ -120,7 +120,7 @@ async function showRoadStatsPopup(map, popupLngLat, queryLat, queryLng, hintDev)
 /**
  * show3DH3CellPopup — renders a rich actionable Vietnamese popup for a 3D H3 Hexagon cell.
  */
-async function show3DH3CellPopup(map, popupLngLat, cellProps) {
+async function show3DH3CellPopup(map, popupLngLat, cellProps, points = []) {
   const PopupClass = map._maplibregl?.Popup || window.maplibregl?.Popup;
   const f = cellProps;
 
@@ -176,11 +176,11 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps) {
 
     const fmtDev = v => v >= 1000 ? `${(v / 1000).toFixed(1)} km` : `${Math.round(v)} m`;
 
-    const totalTrips = dbStats?.unique_trips ?? 0;
-    const drivers = dbStats?.unique_drivers ?? 0;
-    const avoidRatio = dbStats?.avoid_ratio ?? 0;
-    const normalTrips = dbStats?.normal_trips ?? 0;
-    const highDevTrips = dbStats?.high_dev_trips ?? 0;
+    const highDevTrips = f.avoidTripsCount ?? (dbStats?.high_dev_trips ?? 0);
+    const totalTrips = f.totalTripsCount ?? (dbStats?.unique_trips ?? f.count ?? 0);
+    const drivers = dbStats?.unique_drivers ?? f.totalTripsCount ?? 0;
+    const normalTrips = Math.max(0, totalTrips - highDevTrips);
+    const avoidRatio = totalTrips > 0 ? ((highDevTrips / totalTrips) * 100) : 0;
     const avgDev = dbStats?.avg_deviation ?? f.avgDev ?? 0;
     const maxDev = dbStats?.max_deviation ?? f.maxDev ?? 0;
 
@@ -270,7 +270,9 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps) {
           btn.style.opacity = '0.7';
 
           try {
-            const targetTimeMs = dbStats?.created_at ? new Date(dbStats.created_at).getTime() : (f.created_at || (points && points.length > 0 ? (points[0].created_at || 1372694282000) : null));
+            const targetTimeMs = dbStats?.created_at
+              ? new Date(dbStats.created_at).getTime()
+              : (f.created_at || (Array.isArray(points) && points.length > 0 && points[0]?.created_at ? new Date(points[0].created_at).getTime() : 1372694282000));
 
             const res = await fetch(`${API_URL}/api/ai/investigate`, {
               method: 'POST',
@@ -301,7 +303,7 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps) {
             const osrmSummary = data.evidence?.osrm_alternatives?.summary || 'Đang dùng lộ trình tiêu chuẩn';
             const osrmClass = data.evidence?.osrm_alternatives?.route_classification === 'OPTIMIZED_SHORTCUT' ? '🟢 Đường tắt tối ưu' : data.evidence?.osrm_alternatives?.route_classification === 'INFLATED_DETOUR' ? '🔴 Rẽ lòng vòng' : '🔵 Lộ trình chuẩn';
 
-            const driverRep = data.evidence?.driver_profile ? `👤 Uy tín 30 ngày: <b>${(data.evidence.driver_profile.compliance_rate_30d * 100).toFixed(1)}% chuẩn tuyến</b> (${data.evidence.driver_profile.reputation_level})` : '';
+            const driverRep = data.evidence?.driver_profile ? `👤 Uy tín tài xế: <b>${(data.evidence.driver_profile.compliance_rate_30d * 100).toFixed(1)}% chuẩn tuyến</b> (${data.evidence.driver_profile.reputation_level})` : '';
 
             const trafficState = data.evidence?.traffic_speed ? `🚦 Giao thông: <b>${data.evidence.traffic_speed.traffic_state === 'SEVERE_GRIDLOCK' ? '🔴 Kẹt xe nghiêm trọng' : data.evidence.traffic_speed.traffic_state === 'MODERATE_SLOW' ? '🟡 Chậm cục bộ' : '🟢 Thông thoáng'}</b> (${data.evidence.traffic_speed.current_speed_kmh}/${data.evidence.traffic_speed.baseline_speed_kmh} km/h)` : '';
 
@@ -575,12 +577,13 @@ export default function HeatmapLayer({
     if (!points || points.length === 0) return { type: 'FeatureCollection', features: [] };
 
     // Adaptive Resolution based on point density:
+    // Adaptive Resolution based on point density:
     // >30k points (e.g. Porto 386k dataset): Res 13 (~9m)
     // <30k points (e.g. driver trips / zoomed area): Res 14 (~3m) for street precision
     const resLevel = points.length > 30000 ? 13 : 14;
 
     const h3CellMap = new Map();
-    let maxAvoidTrips = 1;
+    let maxAvoidScore = 1;
 
     for (let i = 0; i < points.length; i++) {
       const pt = points[i];
@@ -588,31 +591,38 @@ export default function HeatmapLayer({
 
       const cell = latLngToCell(pt.lat, pt.lng, resLevel);
       const isAvoidance = (pt.deviation || 0) > 150;
-      const tripId = pt.trip_id || (pt.lat && pt.lng ? `loc-${pt.lat.toFixed(4)},${pt.lng.toFixed(4)}` : `pt-${i}`);
+      // Derive a consistent trip key: use pt.trip_id if present, otherwise group nearby trajectory points per driver/spatial cluster
+      const tripKey = pt.trip_id || (pt.driver_id ? `driver-${pt.driver_id}` : `cluster-${Math.floor(pt.lat * 250)},${Math.floor(pt.lng * 250)}`);
       const item = h3CellMap.get(cell);
 
       if (!item) {
+        const totalTripsSet = new Set([tripKey]);
         const avoidTripsSet = new Set();
-        if (isAvoidance && tripId) avoidTripsSet.add(tripId);
+        if (isAvoidance) avoidTripsSet.add(tripKey);
+
         h3CellMap.set(cell, {
           cell,
           count: 1,
-          avoidTripsSet: avoidTripsSet,
+          totalTripsSet,
+          avoidTripsSet,
           totalDev: pt.deviation || 0,
           maxDev: pt.deviation || 0,
         });
       } else {
         item.count++;
-        if (isAvoidance && tripId) item.avoidTripsSet.add(tripId);
+        item.totalTripsSet.add(tripKey);
+        if (isAvoidance) item.avoidTripsSet.add(tripKey);
         item.totalDev += (pt.deviation || 0);
         item.maxDev = Math.max(item.maxDev, pt.deviation || 0);
       }
     }
 
+    // Compute max avoidance score across all H3 cells
     for (const item of h3CellMap.values()) {
-      const avoidTripsCount = item.avoidTripsSet ? item.avoidTripsSet.size : 0;
-      if (avoidTripsCount > maxAvoidTrips) {
-        maxAvoidTrips = avoidTripsCount;
+      const avoidTripsCount = item.avoidTripsSet.size;
+      const avoidScore = avoidTripsCount;
+      if (avoidScore > maxAvoidScore) {
+        maxAvoidScore = avoidScore;
       }
     }
 
@@ -622,9 +632,12 @@ export default function HeatmapLayer({
         const boundary = cellToBoundary(item.cell, true);
         if (!boundary || boundary.length === 0) continue;
 
-        const avoidTripsCount = item.avoidTripsSet ? item.avoidTripsSet.size : 0;
-        // Ratio strictly based on UNIQUE AVOIDANCE TRIPS (>150m threshold)
-        const ratio = maxAvoidTrips > 0 ? (avoidTripsCount / maxAvoidTrips) : 0;
+        const avoidTripsCount = item.avoidTripsSet.size;
+        const totalTripsCount = item.totalTripsSet.size;
+        const avoidScore = avoidTripsCount;
+
+        // Ratio normalized against the max avoidance score in current view
+        const ratio = maxAvoidScore > 0 ? (avoidScore / maxAvoidScore) : 0;
         const avgDev = Math.round(item.totalDev / item.count);
 
         features.push({
@@ -634,9 +647,10 @@ export default function HeatmapLayer({
             h3Index: item.cell,
             count: item.count,
             avoidTripsCount: avoidTripsCount,
+            totalTripsCount: totalTripsCount,
             ratio: ratio,
             res: resLevel,
-            height: Math.max(10, Math.round(ratio * 220)), // Extrusion height strictly proportional to SỐ CHUYẾN NÉ TRÁNH (10m to 220m)
+            height: Math.max(10, Math.round(ratio * 250)), // Extrusion height strictly proportional to avoidance volume & ratio (10m to 250m)
             avgDev: avgDev,
             maxDev: Math.round(item.maxDev),
           },
@@ -687,7 +701,7 @@ export default function HeatmapLayer({
         e.originalEvent.stopPropagation();
         if (!e.features?.length) return;
         const f = e.features[0].properties;
-        await show3DH3CellPopup(map, e.lngLat, f);
+        await show3DH3CellPopup(map, e.lngLat, f, points);
       });
 
       map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
