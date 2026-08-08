@@ -51,7 +51,7 @@ async def fetch_road_class_threshold(lat: float, lng: float) -> tuple[float, str
     - National Legal Speed Limit Matrix by road class
     """
     if not lat or not lng:
-        return 74.0, "urban_road"
+        return 150.0, "urban_road"
 
     query = f"""
     [out:json][timeout:2];
@@ -101,13 +101,13 @@ async def fetch_road_class_threshold(lat: float, lng: float) -> tuple[float, str
                     if maxspeed_kmh is None:
                         maxspeed_kmh = LEGAL_MAXSPEEDS.get(highway_tag, 50.0)
 
-                    # 3. Scientific AASHTO Dynamic Threshold Formula
-                    threshold = max(20.0, (width_m / 2.0) + (maxspeed_kmh * 1.2))
+                    # 3. Scientific AASHTO Dynamic Threshold Formula (minimum 150m = system default)
+                    threshold = max(150.0, (width_m / 2.0) + (maxspeed_kmh * 1.2))
                     return round(threshold, 1), highway_tag
     except Exception as e:
         print(f"[Tool: Telemetry Road Class Threshold Fallback] {e}")
 
-    return 74.0, "urban_road"
+    return 150.0, "urban_road"
 
 def compute_wilson_interval(k: int, n: int, z: float = 1.96) -> tuple[float, float, float]:
     """

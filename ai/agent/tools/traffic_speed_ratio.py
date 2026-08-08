@@ -2,6 +2,7 @@ import os
 import httpx
 import asyncpg
 from typing import Optional
+from datetime import datetime, timezone
 from models import TrafficSpeedEvidence
 
 # Traffic Laws & OpenStreetMap Road Class speed limit matrix (km/h)
@@ -86,13 +87,36 @@ async def fetch_authoritative_road_limit_and_signal(lat: float, lng: float) -> t
 
     return result
 
-async def check_post_intersection_clearance_speed(lat: float, lng: float) -> float:
+async def check_post_intersection_clearance_speed(lat: float, lng: float, timestamp_ms: Optional[int] = None) -> float:
     """
     Multi-Phase Signal Clearance Trajectory Check:
-    Queries Postgres for peak moving speed of vehicles in this vicinity over a 3-minute (180s) window.
-    If peak clearance speed >= 50% of speed limit, the vehicle was merely waiting for a 90s-120s red light cycle!
+    Queries Postgres for peak moving speed of vehicles in this vicinity.
+    For historical data, queries within ±5 minutes of the given timestamp.
+    For real-time data, queries last 5 minutes from NOW().
+    If peak clearance speed >= 50% of speed limit, the vehicle was waiting for a red light!
     """
     delta = 0.003
+    if timestamp_ms and timestamp_ms > 0:
+        dt = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
+        query = """
+            SELECT COALESCE(MAX(speed_kmh), 0.0)::FLOAT8 AS peak_clearance_speed
+            FROM deviation_events
+            WHERE (latitude BETWEEN $1 AND $2) AND (longitude BETWEEN $3 AND $4)
+              AND speed_kmh > 0
+              AND created_at BETWEEN ($5::TIMESTAMPTZ - INTERVAL '5 minutes') AND ($5::TIMESTAMPTZ + INTERVAL '5 minutes');
+        """
+        try:
+            conn = await asyncpg.connect(POSTGRES_DSN, timeout=2.0)
+            try:
+                row = await conn.fetchrow(query, lat - delta, lat + delta, lng - delta, lng + delta, dt)
+                if row and row["peak_clearance_speed"]:
+                    return float(row["peak_clearance_speed"])
+            finally:
+                await conn.close()
+        except Exception:
+            pass
+        return 0.0
+
     query = """
         SELECT COALESCE(MAX(speed_kmh), 0.0)::FLOAT8 AS peak_clearance_speed
         FROM deviation_events
@@ -113,14 +137,14 @@ async def check_post_intersection_clearance_speed(lat: float, lng: float) -> flo
     return 0.0
 
 async def analyze_traffic_speed(
-    h3_index: str, current_avg_speed: float, lat: float = 0.0, lng: float = 0.0
+    h3_index: str, current_avg_speed: float, lat: float = 0.0, lng: float = 0.0,
+    timestamp_ms: Optional[int] = None
 ) -> TrafficSpeedEvidence:
     """
     Compare current fleet average speed vs official authoritative road speed limit with:
     1. LRU Cache (Zero Overpass internet bottleneck).
     2. Traffic Signal & Intersection Filter (highway=traffic_signals / stop).
-    3. Multi-Phase Signal Clearance Trajectory Protocol to eliminate false positives
-       from long 90s-120s red light cycles.
+    3. Multi-Phase Signal Clearance Trajectory Protocol using timestamp_ms for historical data.
     """
     official_limit, road_name, is_signal = await fetch_authoritative_road_limit_and_signal(lat, lng)
 
@@ -139,7 +163,7 @@ async def analyze_traffic_speed(
     # 2. Traffic Signal & Multi-Phase Clearance Protocol (Solves 90s-120s Red Light Issue)
     if is_signal and state == "SEVERE_GRIDLOCK":
         # Check if vehicles cleared the intersection at normal speeds after signal turned green
-        peak_clearance = await check_post_intersection_clearance_speed(lat, lng)
+        peak_clearance = await check_post_intersection_clearance_speed(lat, lng, timestamp_ms)
         if peak_clearance >= 0.5 * official_limit:
             # Vehicles successfully accelerated post-signal -> Valid Red Light Wait!
             state = "CLEAR"

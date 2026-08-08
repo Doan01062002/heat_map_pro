@@ -27,22 +27,19 @@ async def query_driver_profile(
         WHERE driver_id = $1;
     """
 
-    # 2. Query system-wide compliance of ONLY the specific drivers who appeared in target H3 cell/vicinity
+    # 2. Query compliance of drivers who passed through the target H3 cell/vicinity
+    #    COUNT only trips WITHIN the cell vicinity — NOT their entire system-wide history
+    #    (which incorrectly drags compliance down to ~3% for high-deviation zones)
     delta = 0.002
     min_lat, max_lat = lat - delta, lat + delta
     min_lng, max_lng = lng - delta, lng + delta
 
-    query_cell_drivers_systemwide = """
-        WITH cell_drivers AS (
-            SELECT DISTINCT driver_id
-            FROM deviation_events
-            WHERE (h3_index = $1 OR (latitude BETWEEN $2 AND $3 AND longitude BETWEEN $4 AND $5))
-        )
+    query_cell_compliance = """
         SELECT
-            COUNT(DISTINCT d.trip_id)::INT AS total_trips,
-            COUNT(DISTINCT CASE WHEN d.deviation_meters > 150 THEN d.trip_id END)::INT AS deviated_trips
-        FROM deviation_events d
-        JOIN cell_drivers c ON d.driver_id = c.driver_id;
+            COUNT(DISTINCT trip_id)::INT AS total_trips,
+            COUNT(DISTINCT CASE WHEN deviation_meters > 150 THEN trip_id END)::INT AS deviated_trips
+        FROM deviation_events
+        WHERE (h3_index = $1 OR (latitude BETWEEN $2 AND $3 AND longitude BETWEEN $4 AND $5));
     """
 
     # 3. Dynamic System-wide Network Baseline Query (Zero hardcoding fallback)
@@ -62,8 +59,8 @@ async def query_driver_profile(
                 row = await conn.fetchrow(query_individual, driver_id)
 
             if not row or (row["total_trips"] or 0) == 0:
-                if h3_index:
-                    row = await conn.fetchrow(query_cell_drivers_systemwide, h3_index, min_lat, max_lat, min_lng, max_lng)
+                if h3_index or (lat and lng):
+                    row = await conn.fetchrow(query_cell_compliance, h3_index or "", min_lat, max_lat, min_lng, max_lng)
 
             if not row or (row["total_trips"] or 0) == 0:
                 row = await conn.fetchrow(query_network_baseline)

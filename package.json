@@ -6,7 +6,7 @@
   "scripts": {
     "prestart": "docker compose -f infra/docker-compose.yml --env-file .env up -d --remove-orphans postgres redis ai-agent",
     "start": "concurrently --kill-others-on-fail --prefix-colors \"bgBlue.bold,bgGreen.bold,bgMagenta.bold\" --names \"BACKEND,ADMIN,SIMULATOR\" \"npm run start:backend\" \"npm run start:admin\" \"npm run start:simulator\"",
-    "start:backend": "cd backend && go build -o heatmap-server.exe ./cmd/server && .\\heatmap-server.exe",
+    "start:backend": "cd backend && go run ./cmd/server",
     "start:admin": "cd frontend/admin && npm run dev",
     "start:simulator": "cd frontend/simulator && npm run dev",
     "install:all": "cd frontend/admin && npm install && cd ../simulator && npm install",

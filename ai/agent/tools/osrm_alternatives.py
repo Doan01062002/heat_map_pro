@@ -119,6 +119,6 @@ async def analyze_osrm_alternatives(
 
     return OSRMAlternativeEvidence(
         has_alternatives=False,
-        route_classification="STANDARD",
-        summary="Đang sử dụng lộ trình đơn tiêu chuẩn OSRM."
+        route_classification="OSRM_UNAVAILABLE",
+        summary="Không thể kết nối OSRM — không có dữ liệu lộ trình thay thế.",
     )

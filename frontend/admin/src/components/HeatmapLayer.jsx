@@ -191,7 +191,7 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps, points = []) {
     new PopupClass({ offset: 12, maxWidth: '315px', closeButton: true })
       .setLngLat(popupLngLat)
       .setHTML(`
-        <div style="font-family:Inter,system-ui,sans-serif;font-size:12px;color:#111;line-height:1.75">
+        <div class="custom-thin-scroll" style="font-family:Inter,system-ui,sans-serif;font-size:12px;color:#111;line-height:1.75;max-height:68vh;overflow-y:auto;padding-right:2px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
             <div style="font-weight:800;font-size:13.5px;color:#1b5e20">
               🛑 Ô 3D H3 (Res ${f.res || 14} · ${f.res === 12 ? '~25m' : f.res === 13 ? '~9m' : '~3m'})
@@ -292,6 +292,15 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps, points = []) {
             btn.style.display = 'none';
             box.style.display = 'block';
 
+            // Auto pan camera so the expanded popup with AI analysis is fully visible above bottom bars
+            if (map && map.easeTo) {
+              map.easeTo({
+                center: [centerLng, centerLat],
+                offset: [0, 160],
+                duration: 500,
+              });
+            }
+
             const riskBg = data.risk_level === 'SAFE_FORCE_MAJEURE' ? '#e8f5e9' : data.risk_level === 'SUSPICIOUS' ? '#fff8e1' : '#ffebee';
             const riskColor = data.risk_level === 'SAFE_FORCE_MAJEURE' ? '#2e7d32' : data.risk_level === 'SUSPICIOUS' ? '#f57f17' : '#c62828';
             const riskLabel = data.risk_level === 'SAFE_FORCE_MAJEURE' ? '🟢 BẤT KHẢ KHÁNG (An toàn)' : data.risk_level === 'SUSPICIOUS' ? '🟡 CẦN THEO DÕI' : '🔴 CẢNH BÁO GIAN LẬN';
@@ -300,10 +309,13 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps, points = []) {
             const weatherStr = data.evidence?.weather ? `🌡️ ${data.evidence.weather.temperature ?? 'N/A'}°C · 🌧️ ${data.evidence.weather.rain_mm ?? 0}mm/h (${data.evidence.weather.description})` : 'Thời tiết: Không khả dụng';
             const locationStr = data.evidence?.location_name || '';
 
-            const osrmSummary = data.evidence?.osrm_alternatives?.summary || 'Đang dùng lộ trình tiêu chuẩn';
-            const osrmClass = data.evidence?.osrm_alternatives?.route_classification === 'OPTIMIZED_SHORTCUT' ? '🟢 Đường tắt tối ưu' : data.evidence?.osrm_alternatives?.route_classification === 'INFLATED_DETOUR' ? '🔴 Rẽ lòng vòng' : '🔵 Lộ trình chuẩn';
+            const osrmSummary = data.evidence?.osrm_alternatives?.summary || 'Không có dữ liệu lộ trình';
+            const osrmClass = data.evidence?.osrm_alternatives?.route_classification === 'OPTIMIZED_SHORTCUT' ? '🟢 Đường tắt tối ưu'
+              : data.evidence?.osrm_alternatives?.route_classification === 'INFLATED_DETOUR' ? '🔴 Rẽ lòng vòng'
+              : data.evidence?.osrm_alternatives?.route_classification === 'OSRM_UNAVAILABLE' ? '⚪ Không kết nối OSRM'
+              : '🔵 Lộ trình chuẩn';
 
-            const driverRep = data.evidence?.driver_profile ? `👤 Uy tín tài xế: <b>${(data.evidence.driver_profile.compliance_rate_30d * 100).toFixed(1)}% chuẩn tuyến</b> (${data.evidence.driver_profile.reputation_level})` : '';
+            const driverRep = data.evidence?.driver_profile ? `👤 Uy tín khu vực: <b>${(data.evidence.driver_profile.compliance_rate_30d * 100).toFixed(1)}% chuẩn tuyến</b> (${data.evidence.driver_profile.reputation_level})` : '';
 
             const trafficState = data.evidence?.traffic_speed ? `🚦 Giao thông: <b>${data.evidence.traffic_speed.traffic_state === 'SEVERE_GRIDLOCK' ? '🔴 Kẹt xe nghiêm trọng' : data.evidence.traffic_speed.traffic_state === 'MODERATE_SLOW' ? '🟡 Chậm cục bộ' : '🟢 Thông thoáng'}</b> (${data.evidence.traffic_speed.current_speed_kmh}/${data.evidence.traffic_speed.baseline_speed_kmh} km/h)` : '';
 
@@ -335,6 +347,10 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps, points = []) {
               </div>
               <div style="color:#2e7d32;font-weight:600;font-size:10.5px">💡 Đề xuất: ${data.recommendation}</div>
             `;
+
+            setTimeout(() => {
+              box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }, 100);
           } catch (err) {
             btn.disabled = false;
             btn.innerHTML = '<span>⚠️ AI bận. Bấm để thử lại</span>';

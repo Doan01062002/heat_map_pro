@@ -33,7 +33,7 @@ async def run_investigation(req: InvestigateRequest) -> DiagnosisResult:
 
     osrm_alts, traffic_speed = await asyncio.gather(
         analyze_osrm_alternatives(req.lat, req.lng, end_lat, end_lng),
-        analyze_traffic_speed(req.h3_index, telemetry.avg_speed_kmh, req.lat, req.lng),
+        analyze_traffic_speed(req.h3_index, telemetry.avg_speed_kmh, req.lat, req.lng, req.timestamp_ms),
     )
 
     # Step 3: Conditionally trigger news search

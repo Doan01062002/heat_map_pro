@@ -22,14 +22,16 @@ Nhiệm vụ của bạn là nhận dữ liệu bằng chứng thực tế (Real
    - KHI Mưa lớn >= 10mm/h HOẶC Tin tức có ghi nhận ngập lụt, sạt lở, tai nạn, cấm đường, thi công.
    - HOẶC Giao thông kẹt xe nghiêm trọng (Sụt giảm vận tốc >= 65% so với giới hạn pháp lý).
    - HOẶC Lộ trình OSRM thay thế là OPTIMIZED_SHORTCUT (Tiết kiệm thời gian di chuyển >60 giây).
-   - HOẶC Tỷ lệ đội xe cùng bẻ lái (Đã làm mịn Bayes) >= 50% VÀ Nhóm tài xế có uy tín 30 ngày tốt (Compliance >= 85%).
+   - HOẶC Tỷ lệ đội xe cùng bẻ lái (Đã làm mịn Bayes) >= 50% VÀ Nhóm tài xế có uy tín khu vực tốt (Compliance >= 85%).
 
 2. KẾT LUẬN "FRAUD_ALERT" (🔴 Cảnh báo Gian lận Cố ý):
    - KHI Lộ trình OSRM thay thế là INFLATED_DETOUR (Tài xế rẽ lòng vòng kéo dài quãng đường >1.5km & tốn thêm thời gian bất hợp lý).
-   - HOẶC Tài xế/Nhóm tài xế có tỷ lệ vi phạm cao trong 30 ngày (Compliance < 70%, HIGH_RISK) VÀ Thời tiết ráo mát (<5mm/h), không kẹt xe, không sự kiện giao thông.
+   - HOẶC Tài xế/Nhóm tài xế có tỷ lệ vi phạm khu vực cao (Compliance < 70%, HIGH_RISK) VÀ Thời tiết ráo mát (<5mm/h), không kẹt xe, không sự kiện giao thông.
+   - Nếu OSRM_UNAVAILABLE: không được dùng OSRM để chứng minh FRAUD_ALERT. Dựa vào Telemetry, Weather, Driver Profile, Traffic.
 
 3. KẾT LUẬN "SUSPICIOUS" (🟡 Cần Theo dõi Nghi vấn):
    - KHI Bẻ lái rải rác (15% - 50%), thời tiết & giao thông bình thường, chưa đủ bằng chứng kết luận bất khả kháng hay gian lận cố ý.
+   - HOẶC OSRM_UNAVAILABLE và không đủ bằng chứng từ 5 nguồn còn lại để kết luận chắc chắn.
 
 === QUY TẮC XỬ LÝ MẪU ÍT & BIÊN ĐỘ SAI SỐ THỐNG KÊ (WILSON MARGIN OF ERROR) ===
 - Nếu Biên độ Sai số Thống kê (margin_of_error) > 0.25 (do số mẫu ít unique_trips < 5), AI BẮT BUỘC phải hạ độ tin cậy "confidence" xuống <= 0.75 và nêu rõ trong "summary": "Tỷ lệ bẻ lái đã được làm mịn Bayes (chỉ số adjusted_ratio) do cỡ mẫu nhỏ."
@@ -84,11 +86,12 @@ Thời điểm chuyến xe/sự kiện: {evidence.target_time_str}
     user_prompt += f"""
 4. Lộ trình phụ OSRM:
    - Trạng thái: {osrm_alts.summary if osrm_alts else 'N/A'}
-   - Phân loại: {osrm_alts.route_classification if osrm_alts else 'STANDARD'} (Chênh lệch: {osrm_alts.distance_diff_meters if osrm_alts else 0}m, Tiết kiệm: {osrm_alts.best_time_saving_sec if osrm_alts else 0}s)
+   - Phân loại: {osrm_alts.route_classification if osrm_alts else 'OSRM_UNAVAILABLE'} (Chênh lệch: {osrm_alts.distance_diff_meters if osrm_alts else 0}m, Tiết kiệm: {osrm_alts.best_time_saving_sec if osrm_alts else 0}s)
+   - LƯU Ý: Nếu phân loại là OSRM_UNAVAILABLE, bạn BẮT BUỘC bỏ qua bằng chứng lộ trình OSRM và đánh giá dựa vào 5 bằng chứng còn lại.
 
-5. Hồ sơ & Uy tín toàn hệ thống của Tài xế:
+5. Hồ sơ & Uy tín khu vực của Tài xế:
    - ID Tài xế: {driver_prof.driver_id if driver_prof else 'N/A'}
-   - Tỷ lệ tuân thủ tuyến toàn hệ thống: {driver_prof.compliance_rate_30d * 100:.1f}% ({driver_prof.deviated_trips_30d if driver_prof else 0}/{driver_prof.total_trips_30d if driver_prof else 0} chuyến lệch)
+   - Tỷ lệ tuân thủ tuyến TRONG KHU VỰC: {driver_prof.compliance_rate_30d * 100:.1f}% ({driver_prof.deviated_trips_30d if driver_prof else 0}/{driver_prof.total_trips_30d if driver_prof else 0} chuyến lệch)
    - Mức độ uy tín: {driver_prof.reputation_level if driver_prof else 'EXCELLENT'}
 
 6. Mật độ & Giới hạn Tốc độ Pháp lý:
@@ -198,7 +201,10 @@ def _rule_based_fallback(h3_index: str, evidence: Evidence) -> DiagnosisResult:
         reason_str = ", ".join(reasons)
         summary = f"Tài xế né tránh hợp lý tại {evidence.location_name} do {reason_str}."
         rec = "Tạm thời cập nhật OSRM bypass đoạn đường này. KHÔNG phạt tài xế."
-    elif (osrm_alts and osrm_alts.route_classification == "INFLATED_DETOUR") or (driver_prof and driver_prof.reputation_level == "HIGH_RISK" and ratio >= 0.4):
+    elif (osrm_alts and osrm_alts.route_classification == "INFLATED_DETOUR") or (
+        driver_prof and driver_prof.reputation_level == "HIGH_RISK" and ratio >= 0.4
+        and (not osrm_alts or osrm_alts.route_classification not in ("OPTIMIZED_SHORTCUT", "OSRM_UNAVAILABLE"))
+    ):
         risk = "FRAUD_ALERT"
         conf = 0.92 if telemetry.margin_of_error <= 0.25 else 0.70
         pct = round(ratio * 100, 1)
