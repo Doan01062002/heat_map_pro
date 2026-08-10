@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/heat-map-pro/backend/internal/config"
@@ -333,15 +334,5 @@ func TestHandleWebSocket_Integration(t *testing.T) {
 }
 
 func sleepMs(ms int) {
-	ch := make(chan struct{})
-	go func() {
-		// Busy-wait approximation (no time import needed beyond test timeout)
-		start := testing.AllocsPerRun(0, func() {})
-		_ = start
-		for i := 0; i < ms*100000; i++ {
-			_ = i
-		}
-		close(ch)
-	}()
-	<-ch
+	time.Sleep(time.Duration(ms) * time.Millisecond)
 }

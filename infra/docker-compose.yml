@@ -48,6 +48,9 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./postgres/02-ai-columns.sql:/docker-entrypoint-initdb.d/02-ai-columns.sql:ro
+    ports:
+      - "5432:5432"
     networks:
       - heatmap-net
     deploy:
@@ -75,6 +78,8 @@ services:
         --maxmemory-policy allkeys-lru
         --appendonly no
         --save ""
+    ports:
+      - "6379:6379"
     networks:
       - heatmap-net
     deploy:
@@ -119,6 +124,7 @@ services:
       - FLUSH_INTERVAL_POSTGRES_S=${FLUSH_INTERVAL_POSTGRES_S:-30}
       - BBOX_BUFFER_METERS=${BBOX_BUFFER_METERS:-50}
       - DEVIATION_THRESHOLD_METERS=${DEVIATION_THRESHOLD_METERS:-50}
+      - AI_AGENT_URL=${AI_AGENT_URL:-http://ai-agent:8090}
     depends_on:
       osrm:
         condition: service_healthy
@@ -139,6 +145,40 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # --------------------------------------------------------------------------
+  # Python AI Agent Service (Real-Time Context-Aware Agent)
+  # --------------------------------------------------------------------------
+  ai-agent:
+    build:
+      context: ../ai/agent
+      dockerfile: Dockerfile
+    container_name: heatmap-ai-agent
+    restart: unless-stopped
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - POSTGRES_DSN=postgres://${POSTGRES_USER:-heatmap}:${POSTGRES_PASSWORD:-heatmap_secret_2024}@postgres:5432/${POSTGRES_DB:-heatmap_db}
+    volumes:
+      - ../ai/agent:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8090:8090"
+    networks:
+      - heatmap-net
+    deploy:
+      resources:
+        limits:
+          memory: 150M
+          cpus: "0.5"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8090/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # --------------------------------------------------------------------------
   # Nginx Reverse Proxy (Single Entry Point)

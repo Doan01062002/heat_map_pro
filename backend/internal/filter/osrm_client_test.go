@@ -24,14 +24,14 @@ func TestHaversineDistance(t *testing.T) {
 			name:       "short_distance_hcmc",
 			lat1:       10.7769, lng1: 106.7009,
 			lat2:       10.7779, lng2: 106.7019,
-			wantMeters: 147.0, // approximately 147 meters
-			tolerance:  5.0,   // allow 5m error
+			wantMeters: 155.87, // exact Haversine distance
+			tolerance:  5.0,    // allow 5m error
 		},
 		{
 			name:       "across_hcmc",
 			lat1:       10.7620, lng1: 106.6600,
 			lat2:       10.8230, lng2: 106.7290,
-			wantMeters: 9800.0, // approximately 9.8 km
+			wantMeters: 10139.53, // exact Haversine distance
 			tolerance:  100.0,
 		},
 	}

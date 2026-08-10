@@ -9,10 +9,11 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
     <style>
+      /* Custom Ultra-Thin Sleek Scrollbar */
       * {
         box-sizing: border-box;
         scrollbar-width: thin;
-        scrollbar-color: rgba(108, 99, 255, 0.35) rgba(15, 12, 41, 0.6);
+        scrollbar-color: rgba(108, 99, 255, 0.35) transparent;
       }
       html, body, #root {
         margin: 0;
@@ -22,20 +23,37 @@
         overflow: hidden;
         background-color: #0a0a1a;
       }
-      /* Custom Sleek Scrollbar */
-      ::-webkit-scrollbar {
-        width: 5px;
-        height: 5px;
+      .maplibregl-popup-content,
+      .maplibregl-popup-content *,
+      .custom-thin-scroll {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(100, 110, 140, 0.3) transparent;
       }
-      ::-webkit-scrollbar-track {
-        background: rgba(15, 12, 41, 0.5);
+      ::-webkit-scrollbar,
+      .maplibregl-popup-content::-webkit-scrollbar,
+      .maplibregl-popup-content *::-webkit-scrollbar,
+      .custom-thin-scroll::-webkit-scrollbar {
+        width: 3px !important;
+        height: 3px !important;
       }
-      ::-webkit-scrollbar-thumb {
-        background: rgba(108, 99, 255, 0.35);
-        border-radius: 4px;
+      ::-webkit-scrollbar-track,
+      .maplibregl-popup-content::-webkit-scrollbar-track,
+      .maplibregl-popup-content *::-webkit-scrollbar-track,
+      .custom-thin-scroll::-webkit-scrollbar-track {
+        background: transparent !important;
       }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #6c63ff;
+      ::-webkit-scrollbar-thumb,
+      .maplibregl-popup-content::-webkit-scrollbar-thumb,
+      .maplibregl-popup-content *::-webkit-scrollbar-thumb,
+      .custom-thin-scroll::-webkit-scrollbar-thumb {
+        background: rgba(100, 110, 140, 0.35) !important;
+        border-radius: 10px !important;
+      }
+      ::-webkit-scrollbar-thumb:hover,
+      .maplibregl-popup-content::-webkit-scrollbar-thumb:hover,
+      .maplibregl-popup-content *::-webkit-scrollbar-thumb:hover,
+      .custom-thin-scroll::-webkit-scrollbar-thumb:hover {
+        background: rgba(108, 99, 255, 0.8) !important;
       }
     </style>
   </head>
