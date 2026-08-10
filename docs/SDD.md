@@ -79,7 +79,8 @@ graph TB
 |---|---|---|
 | **Ngôn ngữ Backend** | Go 1.22 | Đồng thời cao, footprint bộ nhớ thấp, goroutine native cho streaming |
 | **Map-matching** | OSRM | Mã nguồn mở, chạy local (không tốn phí API), timeout 500ms chấp nhận được |
-| **Chỉ mục không gian** | Uber H3 Resolution 8 | Ô ~600m² cho phép tổng hợp cấp đội xe có ý nghĩa, không quá chi tiết |
+| **Chỉ mục không gian (Backend)** | **Grid-based indexer thuần Go** | `uber/h3-go` yêu cầu CGO (cần C compiler), không có trên máy dev. Thay bằng grid thuần Go mô phỏng H3 Resolution 8, ô ~460m, format index `H8:latGrid:lngGrid`. Trong production nên đổi sang `h3-go`. |
+| **Chỉ mục không gian (Frontend)** | `h3-js` — **zoom-adaptive** (Res 9–14) | 3D H3 Hexagon Grid tự điều chỉnh resolution theo zoom level: Res 9 (~174m) khi toàn cảnh → Res 14 (~1m) khi zoom sâu nhất (MAX). Debounce 300ms, tối đa 6 lần re-compute. Dedup waypoint OSRM dùng Res 11 (cố định). |
 | **Vận chuyển thời gian thực** | Redis Pub/Sub | Tách rời ingestion và broadcasting; hỗ trợ fan-out tới nhiều admin client |
 | **Lưu trữ lịch sử** | PostgreSQL + PostGIS | Tuân thủ ACID, hỗ trợ truy vấn không gian phong phú |
 | **Render heatmap** | Deck.gl H3HexagonLayer | Hỗ trợ H3 native, tăng tốc WebGL, hỗ trợ >100k hexagon |
@@ -104,7 +105,7 @@ backend/
 │   │   ├── bounding_box.go  # Kiểm tra BBox trong bộ nhớ với buffer 50m
 │   │   └── osrm_client.go   # HTTP client OSRM (Match + Nearest API)
 │   ├── spatial/
-│   │   └── h3_indexer.go    # Chuyển đổi GPS → chỉ số ô H3
+│   │   └── h3_indexer.go    # Grid-based indexer thuần Go (không CGO). Ô ~460m, format H8:lat:lng
 │   ├── aggregator/
 │   │   └── lockfree.go      # sync.Map + atomic.AddUint64 bản đồ bộ đếm
 │   ├── publisher/
@@ -169,7 +170,7 @@ flowchart TD
     D -->|"≤ 50m"| DISCARD3["🗑️ Loại bỏ\n(nhiễu GPS)"]
     D -->|"> 50m"| E
 
-    E["Stage 4\nH3 Indexing\n(lat,lng) → h3_index\n(in-memory, ~µs)"]
+    E["Stage 4\nGrid Indexing (thuần Go)\n(lat,lng) → h3_index\nFormat: H8:latGrid:lngGrid\n(in-memory, ~µs, không CGO)"]
     E --> F["Stage 5\nAtomic Aggregation\naggregator.Increment(h3_index)"]
     F --> G["Stage 6\nPersistence Buffer\npersister.BufferEvent(...)"]
     G --> H["✅ Sự kiện lệch đã ghi nhận"]
@@ -315,6 +316,8 @@ sequenceDiagram
 
 **Entry point:** `frontend/simulator/src/App.jsx`
 
+> 📌 **Lưu ý:** Driver Simulator không dùng H3 để phát hiện lệch. H3 chỉ được dùng ở Admin Dashboard (`h3-js` Resolution 11) để dedup GPS waypoint trước khi gửi vào OSRM.
+
 ```mermaid
 graph TD
     APP["App.jsx\n(Quản lý state)"]
@@ -352,6 +355,23 @@ graph TD
 ### 4.2 Admin Dashboard
 
 **Entry point:** `frontend/admin/src/App.jsx`
+
+> 📌 **Lưu ý về H3 trong Admin Frontend:**
+> - `h3-js` **zoom-adaptive Res 9–14**: 3D Hexagon Grid tự điều chỉnh resolution theo bảng sau:
+>
+> | Zoom | Resolution | Ô | Mức dùng |
+> |---|---|---|---|
+> | < 10 | 9 | ~174m | Toàn thành phố |
+> | 10–11 | 10 | ~66m | Quận / khu vực |
+> | 12–13 | 11 | ~25m | Đường phố |
+> | 14–15 | 12 | ~9m | Ngã tư |
+> | 16–17 | 13 | ~3m | Làn xe |
+> | ≥ 18 | **14 (MAX)** | ~1m | Chi tiết nhất |
+>
+> - Debounce 300ms, chỉ re-compute khi zoom vượt ngưỡng tier (tối đa 6 lần)
+> - `h3-js` **Res 11** (~25m): Dedup GPS waypoint trong `gpsToH3Waypoints()` trước OSRM (cố định)
+> - `h3-js` **Res 10** (~65m): So sánh % trùng lập trong `computeH3Overlap()` (cố định)
+> - Ô lưới heatmap từ backend: format `H8:latGrid:lngGrid` (grid thuần Go, ~460m)
 
 ```mermaid
 graph TD
@@ -795,7 +815,7 @@ sequenceDiagram
 | `POSTGRES_DB` | `heatmap_db` | Tên database PostgreSQL |
 | `POSTGRES_USER` | `heatmap` | Tên người dùng PostgreSQL |
 | `POSTGRES_PASSWORD` | *(bắt buộc)* | Mật khẩu PostgreSQL |
-| `H3_RESOLUTION` | `8` | Độ phân giải H3 (0–15) |
+| `H3_RESOLUTION` | `8` | Resolution của grid indexer (0–15). Resolution 8 ≈ 460m/ô. **Chú ý:** Backend dùng grid thuần Go mô phỏng H3, không dùng thư viện h3-go (cần CGO). |
 | `FLUSH_INTERVAL_REDIS_MS` | `1000` | Chu kỳ flush Redis (ms) |
 | `FLUSH_INTERVAL_POSTGRES_S` | `30` | Chu kỳ ghi batch PostgreSQL (giây) |
 | `BBOX_BUFFER_METERS` | `50` | Độ rộng buffer BBox (mét) |

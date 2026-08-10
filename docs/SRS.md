@@ -37,10 +37,10 @@ Hệ thống nhận dữ liệu GPS từ các tài xế mô phỏng, phát hiệ
 | Thuật Ngữ | Định Nghĩa |
 |---|---|
 | **Sự kiện lệch lộ trình** | Một điểm GPS được xác nhận lệch ≥ 50m so với lộ trình đường bộ đã lên kế hoạch |
-| **Ô H3 (H3 Cell)** | Ô lục giác địa lý ở độ phân giải 8 (~600m²) từ thư viện H3 của Uber |
-| **OSRM** | Open Source Routing Machine — Engine C++ để map-matching trên bản đồ đường bộ |
+| **Ô H3 (H3 Cell / Grid Cell)** | Ô lưới địa lý dùng để nhóm các điểm GPS lệch. **Backend** dùng grid thuần Go mô phỏng H3 Resolution 8 (~460m × 460m). **Frontend** dùng thư viện `h3-js` thật ở Resolution 11 (~25m) để xử lý waypoint. Index backend có format `H8:latGrid:lngGrid`. |
+| **OSRM** | Open Source Routing Machine — Engine C++ để map-matching và tính lộ trình trên bản đồ đường bộ |
 | **Bounding Box (BBox)** | Hình chữ nhật địa lý bao quanh lộ trình dự kiến của chuyến đi (có buffer 50m) |
-| **Heatmap** | Lớp trực quan hóa trên bản đồ, tô màu các ô lục giác theo mức độ lệch lộ trình |
+| **Heatmap** | Lớp trực quan hóa trên bản đồ, tô màu các ô lưới theo mức độ lệch lộ trình |
 | **Chuyến đi (Trip)** | Một hành trình lái xe với điểm xuất phát, điểm đến và lộ trình đã lên kế hoạch |
 | **Driver ID** | Chuỗi định danh duy nhất của tài xế (VD: `DRV-17F56574`, `taxi-20000455`) |
 | **ReAct Engine** | Mẫu AI Reason-Act (Lý luận - Hành động) dùng trong Python AI Agent |
@@ -76,12 +76,12 @@ graph TD
 
 | Hệ Thống Con | Công Nghệ | Vai Trò |
 |---|---|---|
-| **Driver Simulator** | React 18 + Vite + MapLibre | Giao diện mô phỏng GPS và quản lý chuyến đi |
-| **Go Backend** | Go 1.22+, Gorilla WebSocket | Nhận GPS, lọc, tổng hợp, REST API |
-| **OSRM Engine** | C++ Docker container | Map-matching để phát hiện độ lệch |
+| **Driver Simulator** | React 18 + Vite + MapLibre + `h3-js` | Giao diện mô phỏng GPS, routing, dedup waypoint bằng H3 res.11 |
+| **Go Backend** | Go 1.22+, Gorilla WebSocket | Nhận GPS, lọc, tổng hợp (grid indexer thuần Go), REST API |
+| **OSRM Engine** | C++ Docker container | Map-matching để phát hiện độ lệch, tính lộ trình tối ưu |
 | **Redis** | Redis 7 Alpine | Pub/Sub thời gian thực cho broadcast |
 | **PostgreSQL + PostGIS** | PostgreSQL 16 + PostGIS 3.4 | Lưu trữ lịch sử sự kiện lệch lộ trình |
-| **Admin Dashboard** | React 18 + Vite + Deck.gl + MapLibre | Trực quan hóa heatmap và phân tích |
+| **Admin Dashboard** | React 18 + Vite + Deck.gl + MapLibre + `h3-js` | Trực quan hóa heatmap và phân tích lộ trình |
 | **AI Agent** | Python FastAPI + Groq/Gemini LLM | Điều tra ngữ cảnh tự động các điểm nóng |
 | **Nginx** | Nginx Alpine | Reverse proxy, điểm vào duy nhất |
 
@@ -147,8 +147,8 @@ graph TD
 | **FR-ING-03** | Backend PHẢI thực hiện **kiểm tra Bounding Box** trước: nếu điểm GPS nằm trong BBox của chuyến đi (+ buffer 50m), nó PHẢI bị loại bỏ. |
 | **FR-ING-04** | Với các điểm nằm ngoài BBox, backend PHẢI gọi **OSRM Map Match API** (timeout 500ms) để tính khoảng cách lệch. |
 | **FR-ING-05** | Nếu khoảng cách lệch qua OSRM ≤ 50m, điểm PHẢI được phân loại là nhiễu GPS và bị loại bỏ. |
-| **FR-ING-06** | Với lệch lộ trình đã xác nhận (> 50m), backend PHẢI chuyển đổi tọa độ GPS sang **chỉ số ô H3** ở độ phân giải 8. |
-| **FR-ING-07** | Backend PHẢI tăng bộ đếm lệch trong bộ nhớ cho ô H3 tương ứng bằng `sync.Map` + `atomic.AddUint64`. |
+| **FR-ING-06** | Với lệch lộ trình đã xác nhận (> 50m), backend PHẢI chuyển đổi tọa độ GPS sang **chỉ số ô lưới** dùng grid-based indexer thuần Go (mô phỏng H3 Resolution 8, ~460m/ô). Format index: `H8:latGrid:lngGrid`. |
+| **FR-ING-07** | Backend PHẢI tăng bộ đếm lệch trong bộ nhớ cho ô lưới tương ứng bằng `sync.Map` + `atomic.AddUint64`. |
 | **FR-ING-08** | Backend PHẢI đệm chi tiết sự kiện lệch để ghi batch vào PostgreSQL mỗi **30 giây**. |
 | **FR-ING-09** | Backend PHẢI theo dõi Driver ID đang hoạt động trong bộ nhớ để báo cáo số tài xế đang hoạt động. |
 
@@ -165,8 +165,19 @@ graph TD
 
 | ID | Yêu Cầu |
 |---|---|
+| **FR-VIS-01** | Admin Dashboard PHẢI hiển thị 3D H3 Hexagon Layer lên bản đồ với màu sắc thể hiện mức độ lệch (gradient xanh lá → vàng → đỏ), chiều cao (độ ép cột) theo số lượt tránh. |
+| **FR-VIS-02** | Resolution của 3D H3 Hexagon Layer PHẢI **tự điều chỉnh theo zoom level** bản đồ theo bảng sau: |
+| | **Zoom Level** | **H3 Resolution** | **Kích thước ô** | **Mức dùng** |
+| | < 10 | 9 | ~174m | Toàn thành phố |
+| | 10 – 11 | 10 | ~66m | Quận / khu vực |
+| | 12 – 13 | 11 | ~25m | Đường phố |
+| | 14 – 15 | 12 | ~9m | Ngã tư |
+| | 16 – 17 | 13 | ~3m | Làn xe |
+| | ≥ 18 | 14 (MAX) | ~1m | Chi tiết nhất |
+| **FR-VIS-03** | Resolution KHÔNG được thay đổi liên tục trên từng frame zoom. PHẢI debounce tối thiểu **300ms** và chỉ re-compute khi zoom vượt ngưỡng tiếp theo (tối đa 6 lần re-compute cho toàn bộ dải zoom). |
+| **FR-VIS-04** | Popup thông tin khi click vào ô hexagon PHẢI hiển thị đúng resolution và kích thước ô tương ứng. |
+| **FR-VIS-05** | Dashboard PHẢI hiển thị smooth 2D heatmap gradient song song với 3D H3 Layer (có thể tắt bật riêng). |
 | **FR-ADMIN-01** | Dashboard PHẢI hiển thị bản đồ nền MapLibre GL JS, không cần API key, dark theme. |
-| **FR-ADMIN-02** | Dashboard PHẢI hiển thị lớp **Deck.gl H3HexagonLayer** tô màu lục giác: xanh lá (thấp) → vàng → cam → đỏ (nghiêm trọng). |
 | **FR-ADMIN-03** | Ở **Chế Độ Live**, dashboard PHẢI tiêu thụ luồng WebSocket và cập nhật liên tục lớp heatmap H3 trong thời gian thực. |
 | **FR-ADMIN-04** | Ở **Chế Độ Lịch Sử**, dashboard PHẢI lấy dữ liệu từ `GET /api/history?from=<ms>&to=<ms>`. |
 | **FR-ADMIN-05** | Dashboard PHẢI hỗ trợ bộ lọc **Khoảng Thời Gian** (From / To datetime picker) ở chế độ Lịch Sử. |
@@ -223,6 +234,7 @@ graph TD
 | **NFR-P-05** | Chu kỳ flush Redis: **1.000 ms** (1 giây) cho cập nhật thời gian thực. |
 | **NFR-P-06** | Chu kỳ ghi batch PostgreSQL: **30 giây** để đảm bảo hiệu quả persistence. |
 | **NFR-P-07** | Kiểm tra Bounding Box PHẢI là thao tác **O(1)** trong bộ nhớ, không gọi OSRM. |
+| **NFR-P-08** | Chuyển đổi tọa độ GPS sang index ô lưới PHẢI là thao tác **O(1)** không dùng CGO (thuần Go). |
 
 ### 5.2 Độ Tin Cậy
 
