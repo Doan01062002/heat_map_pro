@@ -165,10 +165,11 @@ func (w *PostgresWriter) flush(ctx context.Context) {
 	)
 }
 
-// HandleHistoryQuery handles GET /api/history?from=<unix_ms>&to=<unix_ms>
+// HandleHistoryQuery handles GET /api/history?from=<unix_ms>&to=<unix_ms>&driver_id=<id>
 func (w *PostgresWriter) HandleHistoryQuery(wr http.ResponseWriter, r *http.Request) {
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
+	driverID := r.URL.Query().Get("driver_id")
 
 	fromTime := time.Unix(0, 0)
 	toTime := time.Now().Add(24 * time.Hour)
@@ -184,11 +185,29 @@ func (w *PostgresWriter) HandleHistoryQuery(wr http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	rows, err := w.pool.Query(r.Context(),
-		`SELECT h3_index, intensity, last_updated, unique_drivers
-		 FROM get_heatmap_for_period($1, $2)`,
-		fromTime, toTime,
-	)
+	var rows pgx.Rows
+	var err error
+
+	if driverID != "" {
+		query := `
+			SELECT
+				h3_index,
+				COUNT(*)::INTEGER AS intensity,
+				MAX(created_at) AS last_updated,
+				1 AS unique_drivers
+			FROM deviation_events
+			WHERE created_at >= $1 AND created_at <= $2 AND driver_id = $3
+			GROUP BY h3_index
+			ORDER BY intensity DESC
+		`
+		rows, err = w.pool.Query(r.Context(), query, fromTime, toTime, driverID)
+	} else {
+		rows, err = w.pool.Query(r.Context(),
+			`SELECT h3_index, intensity, last_updated, unique_drivers
+			 FROM get_heatmap_for_period($1, $2)`,
+			fromTime, toTime,
+		)
+	}
 	if err != nil {
 		slog.Error("history query failed", "error", err)
 		http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
@@ -320,12 +339,13 @@ func (w *PostgresWriter) Close() {
 	w.pool.Close()
 }
 
-// HandlePointsQuery handles GET /api/points?from=<ms>&to=<ms>&limit=<n>
+// HandlePointsQuery handles GET /api/points?from=<ms>&to=<ms>&limit=<n>&driver_id=<id>
 // Returns raw GPS coordinates for heatmap rendering — naturally on roads.
 func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Request) {
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
 	limitStr := r.URL.Query().Get("limit")
+	driverID := r.URL.Query().Get("driver_id")
 
 	fromTime := time.Unix(0, 0)
 	toTime := time.Now().Add(24 * time.Hour)
@@ -350,22 +370,25 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 
 	var rows pgx.Rows
 	var queryErr error
-	if limit > 0 {
-		rows, queryErr = w.pool.Query(r.Context(), `
-			SELECT latitude, longitude, deviation_meters, trip_id
-			FROM deviation_events
-			WHERE created_at >= $1 AND created_at <= $2
-			ORDER BY deviation_meters DESC
-			LIMIT $3
-		`, fromTime, toTime, limit)
-	} else {
-		rows, queryErr = w.pool.Query(r.Context(), `
-			SELECT latitude, longitude, deviation_meters, trip_id
-			FROM deviation_events
-			WHERE created_at >= $1 AND created_at <= $2
-			ORDER BY deviation_meters DESC
-		`, fromTime, toTime)
+	
+	query := `SELECT latitude, longitude, deviation_meters, trip_id FROM deviation_events WHERE created_at >= $1 AND created_at <= $2`
+	args := []interface{}{fromTime, toTime}
+	argIdx := 3
+
+	if driverID != "" {
+		query += fmt.Sprintf(" AND driver_id = $%d", argIdx)
+		args = append(args, driverID)
+		argIdx++
 	}
+
+	query += " ORDER BY deviation_meters DESC"
+
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT $%d", argIdx)
+		args = append(args, limit)
+	}
+
+	rows, queryErr = w.pool.Query(r.Context(), query, args...)
 	if queryErr != nil {
 		slog.Error("points query failed", "error", queryErr)
 		http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
@@ -398,12 +421,13 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 	})
 }
 
-// HandleTrajectoriesQuery handles GET /api/trajectories?from=<ms>&to=<ms>&limit=<n>
+// HandleTrajectoriesQuery handles GET /api/trajectories?from=<ms>&to=<ms>&limit=<n>&driver_id=<id>
 // Returns per-trip GPS paths as GeoJSON LineString features.
 func (w *PostgresWriter) HandleTrajectoriesQuery(wr http.ResponseWriter, r *http.Request) {
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
 	limitStr := r.URL.Query().Get("limit")
+	driverID := r.URL.Query().Get("driver_id")
 
 	fromTime := time.Unix(0, 0)
 	toTime := time.Now().Add(24 * time.Hour)
@@ -426,49 +450,43 @@ func (w *PostgresWriter) HandleTrajectoriesQuery(wr http.ResponseWriter, r *http
 		}
 	}
 
-	// Fetch top N trips by point count, ordered by time
-	if limit > 0 {
-		rows, err := w.pool.Query(r.Context(), `
-			SELECT trip_id, driver_id,
-			       array_agg(longitude ORDER BY created_at) AS lngs,
-			       array_agg(latitude  ORDER BY created_at) AS lats,
-			       AVG(deviation_meters)::FLOAT8            AS avg_deviation,
-			       COUNT(*)::INT                            AS point_count
-			FROM deviation_events
-			WHERE created_at >= $1 AND created_at <= $2
-			GROUP BY trip_id, driver_id
-			HAVING COUNT(*) >= 3
-			ORDER BY COUNT(*) DESC
-			LIMIT $3
-		`, fromTime, toTime, limit)
-		if err != nil {
-			slog.Error("trajectories query failed", "error", err)
-			http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
-			return
-		}
-		defer rows.Close()
-		w.renderTrajectoriesJSON(wr, rows, fromTime.UnixMilli(), toTime.UnixMilli())
-	} else {
-		rows, err := w.pool.Query(r.Context(), `
-			SELECT trip_id, driver_id,
-			       array_agg(longitude ORDER BY created_at) AS lngs,
-			       array_agg(latitude  ORDER BY created_at) AS lats,
-			       AVG(deviation_meters)::FLOAT8            AS avg_deviation,
-			       COUNT(*)::INT                            AS point_count
-			FROM deviation_events
-			WHERE created_at >= $1 AND created_at <= $2
-			GROUP BY trip_id, driver_id
-			HAVING COUNT(*) >= 3
-			ORDER BY COUNT(*) DESC
-		`, fromTime, toTime)
-		if err != nil {
-			slog.Error("trajectories query failed", "error", err)
-			http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
-			return
-		}
-		defer rows.Close()
-		w.renderTrajectoriesJSON(wr, rows, fromTime.UnixMilli(), toTime.UnixMilli())
+	query := `
+		SELECT trip_id, driver_id,
+			array_agg(longitude ORDER BY created_at) AS lngs,
+			array_agg(latitude  ORDER BY created_at) AS lats,
+			AVG(deviation_meters)::FLOAT8            AS avg_deviation,
+			COUNT(*)::INT                            AS point_count
+		FROM deviation_events
+		WHERE created_at >= $1 AND created_at <= $2
+	`
+	args := []interface{}{fromTime, toTime}
+	argIdx := 3
+
+	if driverID != "" {
+		query += fmt.Sprintf(" AND driver_id = $%d", argIdx)
+		args = append(args, driverID)
+		argIdx++
 	}
+
+	query += `
+		GROUP BY trip_id, driver_id
+		HAVING COUNT(*) >= 3
+		ORDER BY COUNT(*) DESC
+	`
+
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT $%d", argIdx)
+		args = append(args, limit)
+	}
+
+	rows, err := w.pool.Query(r.Context(), query, args...)
+	if err != nil {
+		slog.Error("trajectories query failed", "error", err)
+		http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	w.renderTrajectoriesJSON(wr, rows, fromTime.UnixMilli(), toTime.UnixMilli())
 }
 
 func (w *PostgresWriter) renderTrajectoriesJSON(wr http.ResponseWriter, rows pgx.Rows, fromMS, toMS int64) {
