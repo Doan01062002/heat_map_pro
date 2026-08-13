@@ -60,6 +60,8 @@ export default function App() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [dateRange, setDateRange] = useState({ from: null, to: null });
   const [selectedDriverId, setSelectedDriverId] = useState(null);
+  // Actual-path H3 cells: roads drivers chose when deviating (for "Hex Tài Xế Đi" layer)
+  const [actualPathCells, setActualPathCells] = useState([]);
 
   const handleSelectDriver = (driverId) => {
     setSelectedDriverId(driverId);
@@ -80,14 +82,19 @@ export default function App() {
       const fromParam = fromMs || PORTO_FROM;
       const toParam = (toMs && toMs !== PORTO_TO) ? toMs : Date.now() + 86400000;
       const driverParam = driverId ? `&driver_id=${encodeURIComponent(driverId)}` : '';
-      const [ptRes, trRes, tripsRes] = await Promise.all([
+      const [ptRes, trRes, tripsRes, apRes] = await Promise.all([
         fetch(`${apiUrl}/api/points?from=${fromParam}&to=${toParam}${driverParam}`),
         fetch(`${apiUrl}/api/trajectories?from=${fromParam}&to=${toParam}${driverParam}`),
         fetch(`${apiUrl}/api/trips?limit=100`),
+        fetch(`${apiUrl}/api/actual-path?from=${fromParam}&to=${toParam}${driverParam}`),
       ]);
       const ptData = await ptRes.json();
       const trData = await trRes.json();
       const dbTripsData = await tripsRes.json();
+      const apData = await apRes.json();
+
+      // Actual-path cells for the "Hex Tài Xế Đi" layer
+      setActualPathCells(apData.cells || []);
 
       let allPoints = ptData.points || [];
 
@@ -105,6 +112,7 @@ export default function App() {
               lng,
               deviation: t.is_deviated ? (t.deviation_meters || 250) : 15,
               trip_id: t.trip_id,
+              driver_id: t.driver_id,
               created_at: t.created_at,
             });
           });
@@ -294,6 +302,7 @@ export default function App() {
         <MapContainer
           points={activePoints}
           selectedTrip={selectedTrip}
+          actualPathCells={actualPathCells}
         />
 
         {/* Loading overlay */}

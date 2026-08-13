@@ -4,6 +4,12 @@ import { snapPointsBatch } from '../utils/osrmRouting';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
 
+// ── Pre-computed hex vertex trig lookup (module-level, computed once) ─────────
+// 7 vertices for a flat-top regular hexagon, angles: -30, 30, 90, 150, 210, 270, -30 (close)
+const _HEX_ANGLES = [0, 1, 2, 3, 4, 5, 6].map(i => (Math.PI / 180) * (60 * i - 30));
+const HEX_COS = _HEX_ANGLES.map(a => Math.cos(a));
+const HEX_SIN = _HEX_ANGLES.map(a => Math.sin(a));
+
 // ── Zoom-Adaptive H3 Resolution ────────────────────────────────────────────
 // Khi zoom sâu hơn → resolution cao hơn → ô lưới nhỏ hơn (chi tiết hơn).
 // Resolution tối đa = 14 (ô ~1m, mức chi tiết cao nhất khi zoom sâu nhất).
@@ -332,8 +338,8 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps, points = []) {
             const osrmSummary = data.evidence?.osrm_alternatives?.summary || 'Không có dữ liệu lộ trình';
             const osrmClass = data.evidence?.osrm_alternatives?.route_classification === 'OPTIMIZED_SHORTCUT' ? '🟢 Đường tắt tối ưu'
               : data.evidence?.osrm_alternatives?.route_classification === 'INFLATED_DETOUR' ? '🔴 Rẽ lòng vòng'
-              : data.evidence?.osrm_alternatives?.route_classification === 'OSRM_UNAVAILABLE' ? '⚪ Không kết nối OSRM'
-              : '🔵 Lộ trình chuẩn';
+                : data.evidence?.osrm_alternatives?.route_classification === 'OSRM_UNAVAILABLE' ? '⚪ Không kết nối OSRM'
+                  : '🔵 Lộ trình chuẩn';
 
             const driverRep = data.evidence?.driver_profile ? `👤 Uy tín khu vực: <b>${(data.evidence.driver_profile.compliance_rate_30d * 100).toFixed(1)}% chuẩn tuyến</b> (${data.evidence.driver_profile.reputation_level})` : '';
 
@@ -399,12 +405,18 @@ export default function HeatmapLayer({
   selectedTrip = null,
   showHeatmap = true,
   show3DH3Grid = true,
+  showActualPath = false,
+  actualPathCells = [],
 }) {
   const initialized = useRef(false);
   const clickHandler = useRef(null);
   const snapCache = useRef(new Map()); // key: "lng,lat" → snapped [lng,lat]
   const snapPending = useRef(false);
   const show3DH3Ref = useRef(show3DH3Grid);
+  const showActualPathRef = useRef(showActualPath);
+
+  // Self-fetched actual-path cells (fallback when prop is empty and layer is ON)
+  const [selfActualPathCells, setSelfActualPathCells] = useState([]);
 
   // H3 resolution thích ứng zoom: khởi tạo mặc định Res 12 (~9m), sẽ cập nhật khi map mount
   const [h3Resolution, setH3Resolution] = useState(12);
@@ -413,6 +425,29 @@ export default function HeatmapLayer({
   useEffect(() => {
     show3DH3Ref.current = show3DH3Grid;
   }, [show3DH3Grid]);
+
+  // Keep showActualPathRef in sync
+  useEffect(() => {
+    showActualPathRef.current = showActualPath;
+  }, [showActualPath]);
+
+  // Self-fetch actual-path cells when layer is toggled ON and prop is still empty
+  useEffect(() => {
+    if (!showActualPath) return;
+    if (actualPathCells && actualPathCells.length > 0) return; // already have data from parent
+    if (selfActualPathCells.length > 0) return; // already self-fetched
+
+    const PORTO_FROM = 1372636800000;
+    const toMs = Date.now() + 86400000;
+    fetch(`${API_URL}/api/actual-path?from=${PORTO_FROM}&to=${toMs}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.cells && data.cells.length > 0) {
+          setSelfActualPathCells(data.cells);
+        }
+      })
+      .catch(err => console.warn('[HeatmapLayer] actual-path self-fetch failed:', err));
+  }, [showActualPath, actualPathCells]);
 
   // ── Zoom-adaptive H3 resolution listener ────────────────────────────────
   // Debounce 300ms: chỉ re-compute khi zoom vượt ngưỡng resolution tier, không
@@ -609,6 +644,10 @@ export default function HeatmapLayer({
         if (map.getLayer('hm-snapped-dots') &&
           map.queryRenderedFeatures(e.point, { layers: ['hm-snapped-dots'] }).length > 0) return;
 
+        // Skip if clicking on the actual-path extrusion layer (purple hexes)
+        if (map.getLayer('hm-3d-actual-extrusion') &&
+          map.queryRenderedFeatures(e.point, { layers: ['hm-3d-actual-extrusion'] }).length > 0) return;
+
         const { lng, lat } = e.lngLat;
         await showRoadStatsPopup(map, e.lngLat, lat, lng);
       };
@@ -635,7 +674,10 @@ export default function HeatmapLayer({
     if (map.getLayer('hm-snapped-dots')) {
       map.setLayoutProperty('hm-snapped-dots', 'visibility', (!show3DH3Grid && showHeatmap) ? 'visible' : 'none');
     }
-  }, [map, showHeatmap, show3DH3Grid]);
+    if (map.getLayer('hm-3d-actual-extrusion')) {
+      map.setLayoutProperty('hm-3d-actual-extrusion', 'visibility', showActualPath ? 'visible' : 'none');
+    }
+  }, [map, showHeatmap, show3DH3Grid, showActualPath]);
 
   // ── Pre-compute 3D H3 Hexagon GeoJSON — zoom-adaptive resolution ──────────
   // Re-computes khi `h3Resolution` đổi (khi zoom vượt ngưỡng tier) hoặc khi `points` đổi.
@@ -781,11 +823,184 @@ export default function HeatmapLayer({
       map.setLayoutProperty(layerId, 'visibility', show3DH3Grid ? 'visible' : 'none');
       if (show3DH3Grid) {
         map.easeTo({ pitch: 48, bearing: -18, duration: 1000 });
-      } else {
+      } else if (!showActualPath) {
+        // Only reset camera if actual-path layer is also off
         map.easeTo({ pitch: 0, bearing: 0, duration: 800 });
       }
     }
   }, [map, h3GeoJSON, show3DH3Grid]);
+
+  // ── Actual-path H3 Extrusion Layer ("Hex Tài Xế Đi") ────────────────────────────
+  // Renders H3 extrusion cells dynamically based on the current GPS points,
+  // filtering for trips that deviated from the plan. Zoom-adaptive.
+  const actualPathH3GeoJSON = useMemo(() => {
+    if (!points || points.length === 0) return { type: 'FeatureCollection', features: [] };
+
+    const resLevel = h3Resolution;
+    const h3CellMap = new Map();
+    let maxIntensity = 1;
+
+    for (let i = 0; i < points.length; i++) {
+      const pt = points[i];
+      if (!pt.lat || !pt.lng) continue;
+      // Only process actual deviations to form the purple paths
+      if (!(pt.deviation > 150)) continue;
+
+      const cell = latLngToCell(pt.lat, pt.lng, resLevel);
+      const tripKey = pt.trip_id || (pt.driver_id ? `driver-${pt.driver_id}` : `cluster-${Math.floor(pt.lat * 250)},${Math.floor(pt.lng * 250)}`);
+
+      const item = h3CellMap.get(cell);
+      if (!item) {
+        const dSet = new Set();
+        if (pt.driver_id) dSet.add(pt.driver_id);
+        h3CellMap.set(cell, {
+          h3Index: cell,
+          intensity: 1, // Number of GPS points in this cell
+          uniqueTripsSet: new Set([tripKey]),
+          uniqueDriversSet: dSet,
+        });
+      } else {
+        item.intensity++;
+        item.uniqueTripsSet.add(tripKey);
+        if (pt.driver_id) item.uniqueDriversSet.add(pt.driver_id);
+      }
+    }
+
+    // Compute max intensity (based on unique trips) across all deviation cells
+    let maxTrips = 1;
+    for (const item of h3CellMap.values()) {
+      if (item.uniqueTripsSet.size > maxTrips) {
+        maxTrips = item.uniqueTripsSet.size;
+      }
+    }
+
+    const features = [];
+    for (const item of h3CellMap.values()) {
+      try {
+        const boundary = cellToBoundary(item.h3Index, true);
+        if (!boundary || boundary.length === 0) continue;
+
+        const ratio = maxTrips > 0 ? (item.uniqueTripsSet.size / maxTrips) : 0;
+        const height = Math.max(10, Math.round(ratio * 220));
+
+        features.push({
+          type: 'Feature',
+          geometry: { type: 'Polygon', coordinates: [boundary] },
+          properties: {
+            h3Index: item.h3Index,
+            intensity: item.intensity,
+            uniqueDrivers: item.uniqueDriversSet.size,
+            uniqueTrips: item.uniqueTripsSet.size,
+            ratio: ratio,
+            height: height,
+          },
+        });
+      } catch (_) { }
+    }
+
+    return { type: 'FeatureCollection', features };
+  }, [points, h3Resolution]);
+
+  useEffect(() => {
+    if (!map) return;
+
+    const sourceId = 'hm-3d-actual-src';
+    const layerId = 'hm-3d-actual-extrusion';
+
+    const addLayerAndSource = () => {
+      if (!map.getSource(sourceId)) {
+        map.addSource(sourceId, {
+          type: 'geojson',
+          data: actualPathH3GeoJSON,
+          tolerance: 1.5,
+          buffer: 0,
+        });
+
+        map.addLayer({
+          id: layerId,
+          type: 'fill-extrusion',
+          source: sourceId,
+          layout: { visibility: showActualPath ? 'visible' : 'none' },
+          paint: {
+            'fill-extrusion-color': [
+              'interpolate', ['linear'], ['get', 'ratio'],
+              0.00, '#b39ddb',
+              0.25, '#7e57c2',
+              0.50, '#5e35b1',
+              0.75, '#3949ab',
+              1.00, '#1a237e',
+            ],
+            'fill-extrusion-height': ['get', 'height'],
+            'fill-extrusion-base': 0,
+            'fill-extrusion-opacity': 0.85,
+          },
+        });
+
+        map.on('click', layerId, (e) => {
+          e.originalEvent.stopPropagation();
+          if (!e.features?.length) return;
+          const f = e.features[0].properties;
+          const PopupClass = map._maplibregl?.Popup || window.maplibregl?.Popup;
+          new PopupClass({ offset: 12, maxWidth: '280px', closeButton: true })
+            .setLngLat(e.lngLat)
+            .setHTML(`
+              <div style="font-family:Inter,system-ui,sans-serif;font-size:12.5px;color:#111;line-height:1.8">
+                <div style="font-weight:800;font-size:14px;margin-bottom:8px;color:#4527a0">
+                  Đường Tài Xế Không Theo Plan
+                </div>
+                <div style="font-size:11px;color:#666;margin-bottom:10px">
+                  Mã Cell: <code style="background:#ede7f6;padding:2px 5px;border-radius:4px;color:#4527a0;font-weight:600">${f.h3Index}</code>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;background:#f3e5f5;padding:8px;border-radius:8px;text-align:center;margin-bottom:8px">
+                  <div>
+                    <div style="color:#777;font-size:9.5px;text-transform:uppercase">TỔNG CHUYẾN</div>
+                    <div style="font-weight:800;font-size:15px;color:#1a237e">${f.uniqueTrips}</div>
+                  </div>
+                  <div>
+                    <div style="color:#777;font-size:9.5px;text-transform:uppercase">TÀI XẾ</div>
+                    <div style="font-weight:800;font-size:15px;color:#7b1fa2">${f.uniqueDrivers}</div>
+                  </div>
+                  <div>
+                    <div style="color:#777;font-size:9.5px;text-transform:uppercase">ĐIỂM GPS</div>
+                    <div style="font-weight:800;font-size:15px;color:#4527a0">${f.intensity}</div>
+                  </div>
+                </div>
+                <div style="font-size:11px;color:#555;background:#fff;padding:6px 8px;border:1px solid #e0e0e0;border-radius:6px">
+                  📍 Đây là đoạn đường tài xế <b>thực tế đã đi</b> thay vì<br/>tuyến OSRM đã vạch. Dùng để phân tích &amp; cải thiện route plan.
+                </div>
+              </div>
+            `)
+            .addTo(map);
+        });
+
+        map.on('mouseenter', layerId, () => { map.getCanvas().style.cursor = 'pointer'; });
+        map.on('mouseleave', layerId, () => { map.getCanvas().style.cursor = ''; });
+      }
+
+      const src = map.getSource(sourceId);
+      if (src) src.setData(actualPathH3GeoJSON);
+
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(layerId, 'visibility', showActualPath ? 'visible' : 'none');
+        if (showActualPath) {
+          map.easeTo({ pitch: 48, bearing: -18, duration: 1000 });
+        } else if (!show3DH3Grid) {
+          map.easeTo({ pitch: 0, bearing: 0, duration: 800 });
+        }
+      }
+    };
+
+    if (!map.isStyleLoaded()) {
+      const onIdle = () => {
+        map.off('idle', onIdle);
+        addLayerAndSource();
+      };
+      map.on('idle', onIdle);
+      return () => map.off('idle', onIdle);
+    } else {
+      addLayerAndSource();
+    }
+  }, [map, actualPathH3GeoJSON, showActualPath, show3DH3Grid]);
 
   // ── Selected trip route overlay ───────────────────────────────────────────
   useEffect(() => {
