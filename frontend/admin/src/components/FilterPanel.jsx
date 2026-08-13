@@ -11,10 +11,14 @@ export default function FilterPanel({
   onFetchHistory, historyLoading,
   connectionStatus,
   trips, selectedTripId, onSelectTrip,
+  selectedDriverId, onSelectDriver,
+  availableDrivers = [],
 }) {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [activeTab, setActiveTab] = useState('map'); // 'map' | 'trips' | 'analytics'
+  const [driverSearch, setDriverSearch] = useState(selectedDriverId || '');
+  const [showDropdown, setShowDropdown] = useState(false);
 
   const isConnected = connectionStatus === 'connected';
 
@@ -77,6 +81,77 @@ export default function FilterPanel({
             </button>
           ))}
         </div>
+      </div>
+
+      {/* ── Driver Filter ────────────────────────────────────────── */}
+      <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
+        <div style={{ color: '#777', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.8px', marginBottom: '8px' }}>
+          Driver Filter
+        </div>
+        <div style={{ display: 'flex', gap: '6px', position: 'relative' }}>
+          <input
+            value={driverSearch}
+            onChange={(e) => {
+              setDriverSearch(e.target.value);
+              setShowDropdown(true);
+              if (e.target.value === '') onSelectDriver(null);
+            }}
+            onFocus={() => setShowDropdown(true)}
+            onBlur={() => setTimeout(() => setShowDropdown(false), 200)}
+            placeholder="Type or select driver..."
+            style={{
+              flex: 1, padding: '7px 10px', boxSizing: 'border-box',
+              background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: '8px', color: '#ddd', fontSize: '11px', colorScheme: 'dark',
+            }}
+          />
+          {showDropdown && availableDrivers.length > 0 && (
+            <div style={{
+              position: 'absolute', top: '100%', left: 0, right: '28px', marginTop: '4px',
+              background: '#1a1a2e', border: '1px solid rgba(255,255,255,0.15)', borderRadius: '6px',
+              maxHeight: '180px', overflowY: 'auto', zIndex: 100, boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+            }}>
+              {availableDrivers
+                .filter(d => d.toLowerCase().includes(driverSearch.toLowerCase()))
+                .map(d => (
+                  <div
+                    key={d}
+                    onClick={() => {
+                      setDriverSearch(d);
+                      onSelectDriver(d);
+                      setShowDropdown(false);
+                    }}
+                    style={{
+                      padding: '8px 10px', fontSize: '11px', color: '#ccc', cursor: 'pointer',
+                      borderBottom: '1px solid rgba(255,255,255,0.05)',
+                    }}
+                    onMouseEnter={e => e.target.style.background = 'rgba(255,255,255,0.1)'}
+                    onMouseLeave={e => e.target.style.background = 'transparent'}
+                  >
+                    {d}
+                  </div>
+              ))}
+              {availableDrivers.filter(d => d.toLowerCase().includes(driverSearch.toLowerCase())).length === 0 && (
+                <div style={{ padding: '8px 10px', fontSize: '11px', color: '#777' }}>No drivers found</div>
+              )}
+            </div>
+          )}
+          {selectedDriverId && (
+            <button
+              onClick={() => { setDriverSearch(''); onSelectDriver(null); }}
+              style={{
+                background: 'rgba(255,68,68,0.2)', border: '1px solid rgba(255,68,68,0.4)', borderRadius: '6px',
+                color: '#ffdddd', cursor: 'pointer', padding: '0 8px', fontSize: '12px', transition: '0.2s'
+              }}
+              title="Clear Filter"
+            >✕</button>
+          )}
+        </div>
+        {selectedDriverId && (
+          <div style={{ marginTop: '6px', color: '#ffaa00', fontSize: '10px' }}>
+            Viewing exclusive heatmap for {selectedDriverId}
+          </div>
+        )}
       </div>
 
       {/* ── Date Range (history only) ───────────────────────────── */}

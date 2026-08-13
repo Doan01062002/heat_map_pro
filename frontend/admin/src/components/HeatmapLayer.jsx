@@ -1,8 +1,28 @@
-import { useEffect, useRef, useMemo } from 'react';
+import { useEffect, useRef, useMemo, useState } from 'react';
 import { latLngToCell, cellToBoundary } from 'h3-js';
 import { snapPointsBatch } from '../utils/osrmRouting';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+
+// ── Zoom-Adaptive H3 Resolution ────────────────────────────────────────────
+// Khi zoom sâu hơn → resolution cao hơn → ô lưới nhỏ hơn (chi tiết hơn).
+// Resolution tối đa = 14 (ô ~1m, mức chi tiết cao nhất khi zoom sâu nhất).
+const H3_RES_SIZE = { 9: '~174m', 10: '~66m', 11: '~25m', 12: '~9m', 13: '~3m', 14: '~1m' };
+
+/**
+ * zoomToH3Resolution — Ánh xạ zoom level của bản đồ sang H3 resolution (9–14).
+ * Mỗi bước resolution chia đôi kích thước ô, chỉ re-compute khi vượt ngưỡng.
+ * @param {number} zoom  MapLibre zoom level
+ * @returns {number}  H3 resolution từ 9 đến 14
+ */
+function zoomToH3Resolution(zoom) {
+  if (zoom < 10) return 9;   // ~174m/ô — toàn thành phố
+  if (zoom < 12) return 10;  // ~66m/ô  — quận / khu vực
+  if (zoom < 14) return 11;  // ~25m/ô  — đường phố
+  if (zoom < 16) return 12;  // ~9m/ô   — ngã tư
+  if (zoom < 18) return 13;  // ~3m/ô   — làn xe
+  return 14;                 // ~1m/ô   — MAX, chi tiết nhất
+}
 
 // ── Shared popup helper ───────────────────────────────────────────────────────
 /**
@@ -194,7 +214,7 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps, points = []) {
         <div class="custom-thin-scroll" style="font-family:Inter,system-ui,sans-serif;font-size:12px;color:#111;line-height:1.75;max-height:68vh;overflow-y:auto;padding-right:2px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
             <div style="font-weight:800;font-size:13.5px;color:#1b5e20">
-              🛑 Ô 3D H3 (Res ${f.res || 14} · ${f.res === 12 ? '~25m' : f.res === 13 ? '~9m' : '~3m'})
+              🛑 Ô 3D H3 (Res ${f.res || 14} · ${H3_RES_SIZE[f.res] || '~1m'})
             </div>
             <span style="background:${riskBg};color:${riskColor};padding:2px 8px;border-radius:10px;font-size:10.5px;font-weight:700">
               ${riskLabel}
@@ -386,10 +406,39 @@ export default function HeatmapLayer({
   const snapPending = useRef(false);
   const show3DH3Ref = useRef(show3DH3Grid);
 
+  // H3 resolution thích ứng zoom: khởi tạo mặc định Res 12 (~9m), sẽ cập nhật khi map mount
+  const [h3Resolution, setH3Resolution] = useState(12);
+
   // Keep show3DH3Ref in sync
   useEffect(() => {
     show3DH3Ref.current = show3DH3Grid;
   }, [show3DH3Grid]);
+
+  // ── Zoom-adaptive H3 resolution listener ────────────────────────────────
+  // Debounce 300ms: chỉ re-compute khi zoom vượt ngưỡng resolution tier, không
+  // re-compute trên từng frame zoom — tránh lag với 386k+ điểm GPS.
+  useEffect(() => {
+    if (!map) return;
+    // Đồng bộ ngay với zoom hiện tại khi map mới mount
+    setH3Resolution(zoomToH3Resolution(map.getZoom()));
+
+    let timer = null;
+    const onZoomEnd = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        setH3Resolution(prev => {
+          const next = zoomToH3Resolution(map.getZoom());
+          return prev !== next ? next : prev; // Chỉ update khi đổi resolution tier thật sự
+        });
+      }, 300);
+    };
+
+    map.on('zoomend', onZoomEnd);
+    return () => {
+      map.off('zoomend', onZoomEnd);
+      clearTimeout(timer);
+    };
+  }, [map]);
 
   // ── Heatmap + dot layers + click handler ──────────────────────────────────
   useEffect(() => {
@@ -588,15 +637,15 @@ export default function HeatmapLayer({
     }
   }, [map, showHeatmap, show3DH3Grid]);
 
-  // ── Pre-compute 3D H3 Hexagon GeoJSON statically with Adaptive Resolution ─
+  // ── Pre-compute 3D H3 Hexagon GeoJSON — zoom-adaptive resolution ──────────
+  // Re-computes khi `h3Resolution` đổi (khi zoom vượt ngưỡng tier) hoặc khi `points` đổi.
   const h3GeoJSON = useMemo(() => {
     if (!points || points.length === 0) return { type: 'FeatureCollection', features: [] };
 
-    // Adaptive Resolution based on point density:
-    // Adaptive Resolution based on point density:
-    // >30k points (e.g. Porto 386k dataset): Res 13 (~9m)
-    // <30k points (e.g. driver trips / zoomed area): Res 14 (~3m) for street precision
-    const resLevel = points.length > 30000 ? 13 : 14;
+    // Zoom-adaptive resolution từ h3Resolution state (thay đổi theo zoom level):
+    // Zoom <10 → Res 9 (~174m) | 10-11 → Res 10 (~66m) | 12-13 → Res 11 (~25m)
+    // 14-15 → Res 12 (~9m)     | 16-17 → Res 13 (~3m)   | ≥18   → Res 14 (~1m) [MAX]
+    const resLevel = h3Resolution; // lấy từ zoom-adaptive state
 
     const h3CellMap = new Map();
     let maxAvoidScore = 1;
@@ -675,7 +724,7 @@ export default function HeatmapLayer({
     }
 
     return { type: 'FeatureCollection', features };
-  }, [points]);
+  }, [points, h3Resolution]);
 
   // ── 3D H3 Hexagon Extrusion Grid Layer (~1.5m radius, Res 14) ──────────────
   useEffect(() => {

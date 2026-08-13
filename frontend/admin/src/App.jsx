@@ -59,19 +59,30 @@ export default function App() {
   const [historyStats, setHistoryStats] = useState({ totalPoints: 0, totalTrips: 0 });
   const [historyLoading, setHistoryLoading] = useState(false);
   const [dateRange, setDateRange] = useState({ from: null, to: null });
+  const [selectedDriverId, setSelectedDriverId] = useState(null);
+
+  const handleSelectDriver = (driverId) => {
+    setSelectedDriverId(driverId);
+    if (driverId && mode !== 'history') {
+      setMode('history');
+      clearCells();
+      setSelectedTrip(null);
+    }
+  };
 
   // Selected trip for route detail
   const [selectedTrip, setSelectedTrip] = useState(null);
 
-  const fetchHistory = async (fromMs, toMs) => {
+  const fetchHistory = async (fromMs, toMs, driverId = selectedDriverId) => {
     setHistoryLoading(true);
     setSelectedTrip(null);
     try {
       const fromParam = fromMs || PORTO_FROM;
       const toParam = (toMs && toMs !== PORTO_TO) ? toMs : Date.now() + 86400000;
+      const driverParam = driverId ? `&driver_id=${encodeURIComponent(driverId)}` : '';
       const [ptRes, trRes, tripsRes] = await Promise.all([
-        fetch(`${apiUrl}/api/points?from=${fromParam}&to=${toParam}`),
-        fetch(`${apiUrl}/api/trajectories?from=${fromParam}&to=${toParam}`),
+        fetch(`${apiUrl}/api/points?from=${fromParam}&to=${toParam}${driverParam}`),
+        fetch(`${apiUrl}/api/trajectories?from=${fromParam}&to=${toParam}${driverParam}`),
         fetch(`${apiUrl}/api/trips?limit=100`),
       ]);
       const ptData = await ptRes.json();
@@ -135,7 +146,7 @@ export default function App() {
     let retries = 0;
     const tryFetch = async () => {
       try {
-        await fetchHistory(PORTO_FROM, PORTO_TO);
+        await fetchHistory(PORTO_FROM, PORTO_TO, selectedDriverId);
         setFetchError(null);
       } catch (err) {
         if (retries < 3) {
@@ -148,6 +159,15 @@ export default function App() {
     };
     tryFetch();
   }, []);
+
+  // Refetch when selectedDriverId changes
+  useEffect(() => {
+    if (dateRange.from && dateRange.to) {
+      fetchHistory(new Date(dateRange.from).getTime(), new Date(dateRange.to).getTime(), selectedDriverId);
+    } else {
+      fetchHistory(PORTO_FROM, PORTO_TO, selectedDriverId);
+    }
+  }, [selectedDriverId]);
 
   const handleSelectTrip = async (trip) => {
     if (!trip) { setSelectedTrip(null); return; }
@@ -258,12 +278,15 @@ export default function App() {
         onModeChange={m => { setMode(m); if (m === 'live') { clearCells(); setSelectedTrip(null); } }}
         dateRange={dateRange}
         onDateRangeChange={setDateRange}
-        onFetchHistory={fetchHistory}
+        onFetchHistory={(from, to) => fetchHistory(from, to, selectedDriverId)}
         historyLoading={historyLoading}
         connectionStatus={connectionStatus}
         trips={mode === 'history' ? historyTrips : liveTrips}
+        availableDrivers={Array.from(new Set([...liveTrips, ...historyTrips].map(t => t.driver_id))).filter(Boolean)}
         selectedTripId={selectedTrip?.trip_id}
         onSelectTrip={handleSelectTrip}
+        selectedDriverId={selectedDriverId}
+        onSelectDriver={handleSelectDriver}
       />
 
       {/* Map area */}
