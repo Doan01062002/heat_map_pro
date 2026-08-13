@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"sync"
@@ -20,8 +21,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// DeviationEvent represents a single confirmed deviation to be persisted.
-// It is produced by the ingestion handler and buffered here until the next flush.
+// DeviationEvent represents a single confirmed GPS event to be persisted.
+// EventType distinguishes:
+//   - "deviation"    — GPS point > 50m from planned OSRM route (driver is off-route)
+//   - "actual_path"  — GPS point of the road the driver actually chose instead of
+//                      the OSRM suggestion (i.e. the detour path itself)
 type DeviationEvent struct {
 	DriverID        string
 	TripID          string
@@ -32,6 +36,7 @@ type DeviationEvent struct {
 	Heading         float32
 	SpeedKmh        float32
 	Timestamp       time.Time
+	EventType       string // "deviation" | "actual_path" — defaults to "deviation"
 }
 
 // PostgresWriter handles batch inserts and historical queries.
@@ -130,18 +135,23 @@ func (w *PostgresWriter) flush(ctx context.Context) {
 		return
 	}
 
-	const insertSQL = `INSERT INTO deviation_events 
-		(driver_id, trip_id, latitude, longitude, h3_index, deviation_meters, heading, speed_kmh, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+	const insertSQL = `INSERT INTO deviation_events
+		(driver_id, trip_id, latitude, longitude, h3_index, deviation_meters, heading, speed_kmh, created_at, event_type)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 
 	inserted := 0
 	for _, e := range events {
+		eventType := e.EventType
+		if eventType == "" {
+			eventType = "deviation"
+		}
 		_, err := tx.Exec(ctx, insertSQL,
 			e.DriverID, e.TripID,
 			e.Latitude, e.Longitude,
 			e.H3Index, e.DeviationMeters,
 			e.Heading, e.SpeedKmh,
 			e.Timestamp,
+			eventType,
 		)
 		if err != nil {
 			slog.Error("postgres flush: insert failed",
@@ -371,7 +381,7 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 	var rows pgx.Rows
 	var queryErr error
 	
-	query := `SELECT latitude, longitude, deviation_meters, trip_id FROM deviation_events WHERE created_at >= $1 AND created_at <= $2`
+	query := `SELECT latitude, longitude, deviation_meters, trip_id, driver_id FROM deviation_events WHERE created_at >= $1 AND created_at <= $2`
 	args := []interface{}{fromTime, toTime}
 	argIdx := 3
 
@@ -401,12 +411,13 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 		Lng       float64 `json:"lng"`
 		Deviation float64 `json:"deviation"`
 		TripID    string  `json:"trip_id"`
+		DriverID  string  `json:"driver_id"`
 	}
 
 	points := make([]point, 0, 1024)
 	for rows.Next() {
 		var p point
-		if err := rows.Scan(&p.Lat, &p.Lng, &p.Deviation, &p.TripID); err != nil {
+		if err := rows.Scan(&p.Lat, &p.Lng, &p.Deviation, &p.TripID, &p.DriverID); err != nil {
 			continue
 		}
 		points = append(points, p)
@@ -546,9 +557,8 @@ func (w *PostgresWriter) renderTrajectoriesJSON(wr http.ResponseWriter, rows pgx
 
 // HandleRoadStatsQuery returns aggregated statistics for GPS events near a map click point.
 // Query params: lat, lng (required), radius (meters, default 120, max 400).
-// Used for the "click on road segment → show Vietnamese stats popup" feature.
-// Supports both Bounding Box matching (min_lat/max_lat/min_lng/max_lng) for exact H3 Hexagon polygons
-// and Haversine radial distance matching (lat/lng/radius).
+// Supports Bounding Box (min_lat/max_lat/min_lng/max_lng) for exact H3 Hexagon polygons
+// or PostGIS ST_DWithin for fast radial queries (replaces Haversine full-scan).
 func (w *PostgresWriter) HandleRoadStatsQuery(wr http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		wr.WriteHeader(http.StatusOK)
@@ -575,6 +585,7 @@ func (w *PostgresWriter) HandleRoadStatsQuery(wr http.ResponseWriter, r *http.Re
 		queryLat = (minLat + maxLat) / 2.0
 		queryLng = (minLng + maxLng) / 2.0
 
+		// Bounding-box match — event_type='deviation' only for road-stats (deviation perspective)
 		const bboxQuery = `
 			SELECT
 				COUNT(*)                                                               AS total_events,
@@ -587,6 +598,7 @@ func (w *PostgresWriter) HandleRoadStatsQuery(wr http.ResponseWriter, r *http.Re
 				COUNT(DISTINCT CASE WHEN deviation_meters <= 150 THEN trip_id END)    AS normal_trips
 			FROM deviation_events
 			WHERE latitude BETWEEN $1 AND $2 AND longitude BETWEEN $3 AND $4
+			  AND event_type = 'deviation'
 		`
 		row = w.pool.QueryRow(ctx, bboxQuery, minLat, maxLat, minLng, maxLng)
 	} else {
@@ -614,6 +626,7 @@ func (w *PostgresWriter) HandleRoadStatsQuery(wr http.ResponseWriter, r *http.Re
 			}
 		}
 
+		// PostGIS ST_DWithin — uses GIST index on geog column (O(log n) vs O(n) Haversine)
 		const query = `
 			SELECT
 				COUNT(*)                                                               AS total_events,
@@ -625,13 +638,12 @@ func (w *PostgresWriter) HandleRoadStatsQuery(wr http.ResponseWriter, r *http.Re
 				COUNT(DISTINCT CASE WHEN deviation_meters > 150 THEN trip_id END)     AS high_dev_trips,
 				COUNT(DISTINCT CASE WHEN deviation_meters <= 150 THEN trip_id END)    AS normal_trips
 			FROM deviation_events
-			WHERE (
-				6371000.0 * acos(GREATEST(-1.0, LEAST(1.0,
-					cos(radians($1)) * cos(radians(latitude))  *
-					cos(radians(longitude) - radians($2)) +
-					sin(radians($1)) * sin(radians(latitude))
-				)))
-			) <= $3
+			WHERE ST_DWithin(
+				geog,
+				ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography,
+				$3
+			)
+			  AND event_type = 'deviation'
 		`
 		row = w.pool.QueryRow(ctx, query, lat, lng, radius)
 	}
@@ -678,18 +690,20 @@ func (w *PostgresWriter) HandleRoadStatsQuery(wr http.ResponseWriter, r *http.Re
 
 // TripPayload defines the JSON structure for saving/retrieving trips.
 type TripPayload struct {
-	TripID          string          `json:"trip_id"`
-	DriverID        string          `json:"driver_id"`
-	DriverName      string          `json:"driver_name,omitempty"`
-	OriginJSON      json.RawMessage `json:"origin"`
-	DestinationJSON json.RawMessage `json:"destination"`
-	WaypointsJSON   json.RawMessage `json:"waypoints"`
-	ActualRouteJSON json.RawMessage `json:"actual_route"`
-	DistanceKm      float64         `json:"distance_km"`
-	DurationMin     int             `json:"duration_min"`
-	IsDeviated      bool            `json:"is_deviated"`
-	Status          string          `json:"status"`
-	CreatedAt       int64           `json:"created_at"`
+	TripID            string          `json:"trip_id"`
+	DriverID          string          `json:"driver_id"`
+	DriverName        string          `json:"driver_name,omitempty"`
+	OriginJSON        json.RawMessage `json:"origin"`
+	DestinationJSON   json.RawMessage `json:"destination"`
+	WaypointsJSON     json.RawMessage `json:"waypoints"`
+	ActualRouteJSON   json.RawMessage `json:"actual_route"`
+	PlannedRouteJSON  json.RawMessage `json:"planned_route,omitempty"`  // OSRM suggested polyline [[lng,lat],...]
+	DistanceKm        float64         `json:"distance_km"`
+	DurationMin       int             `json:"duration_min"`
+	IsDeviated        bool            `json:"is_deviated"`
+	DeviationRatio    float64         `json:"deviation_ratio,omitempty"` // 0.0–1.0: fraction of actual route off planned
+	Status            string          `json:"status"`
+	CreatedAt         int64           `json:"created_at"`
 }
 
 // HandleSaveTrip handles POST /api/trips to save a trip with rich metadata.
@@ -722,6 +736,9 @@ func (w *PostgresWriter) HandleSaveTrip(wr http.ResponseWriter, r *http.Request)
 	if len(req.ActualRouteJSON) == 0 {
 		req.ActualRouteJSON = json.RawMessage("[]")
 	}
+	if len(req.PlannedRouteJSON) == 0 {
+		req.PlannedRouteJSON = json.RawMessage("[]")
+	}
 	if req.Status == "" {
 		req.Status = "completed"
 	}
@@ -734,27 +751,54 @@ func (w *PostgresWriter) HandleSaveTrip(wr http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// ── Compute deviation_ratio: fraction of actual route > 50m from planned ─
+	var actualCoords [][2]float64
+	var plannedCoords [][2]float64
+	_ = json.Unmarshal(req.ActualRouteJSON, &actualCoords)
+	_ = json.Unmarshal(req.PlannedRouteJSON, &plannedCoords)
+
+	deviationRatio := 0.0
+	if len(plannedCoords) > 0 && len(actualCoords) > 0 {
+		offRouteCount := 0
+		for _, ap := range actualCoords {
+			minDist := math.MaxFloat64
+			for j := 0; j < len(plannedCoords)-1; j++ {
+				d := pointSegDistM(ap, plannedCoords[j], plannedCoords[j+1])
+				if d < minDist {
+					minDist = d
+				}
+			}
+			if minDist > 50.0 {
+				offRouteCount++
+			}
+		}
+		deviationRatio = float64(offRouteCount) / float64(len(actualCoords))
+	}
+	req.DeviationRatio = math.Round(deviationRatio*1000) / 1000 // 3 decimal places
+
 	query := `
 		INSERT INTO trips (
 			trip_id, driver_id, origin_json, destination_json,
-			waypoints_json, actual_route_json, distance_km, duration_min,
-			is_deviated, status, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+			waypoints_json, actual_route_json, planned_route_json,
+			distance_km, duration_min, is_deviated, deviation_ratio, status, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
 		ON CONFLICT (trip_id) DO UPDATE SET
 			origin_json = EXCLUDED.origin_json,
 			destination_json = EXCLUDED.destination_json,
 			waypoints_json = EXCLUDED.waypoints_json,
 			actual_route_json = EXCLUDED.actual_route_json,
+			planned_route_json = EXCLUDED.planned_route_json,
 			distance_km = EXCLUDED.distance_km,
 			duration_min = EXCLUDED.duration_min,
 			is_deviated = EXCLUDED.is_deviated,
+			deviation_ratio = EXCLUDED.deviation_ratio,
 			status = EXCLUDED.status;
 	`
 
 	_, err := w.pool.Exec(r.Context(), query,
 		req.TripID, req.DriverID, req.OriginJSON, req.DestinationJSON,
-		req.WaypointsJSON, req.ActualRouteJSON, req.DistanceKm, req.DurationMin,
-		req.IsDeviated, req.Status,
+		req.WaypointsJSON, req.ActualRouteJSON, req.PlannedRouteJSON,
+		req.DistanceKm, req.DurationMin, req.IsDeviated, req.DeviationRatio, req.Status,
 	)
 
 	if err != nil {
@@ -763,35 +807,45 @@ func (w *PostgresWriter) HandleSaveTrip(wr http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Insert points into deviation_events with H3 spatial indexing for History Heatmap & 3D H3 Grid
-	var routeCoords [][2]float64
-	if err := json.Unmarshal(req.ActualRouteJSON, &routeCoords); err == nil && len(routeCoords) > 0 {
+	// ── Insert actual_path events (the road the driver actually chose) ────────
+	// Each point from the actual GPS route is tagged event_type='actual_path'.
+	// These feed the "Hex Tài Xế Đi" layer in the admin dashboard.
+	if len(actualCoords) > 0 {
 		indexer := spatial.NewH3Indexer(8)
 		now := time.Now()
 
-		for idx, pt := range routeCoords {
+		const insertActual = `
+			INSERT INTO deviation_events (
+				driver_id, trip_id, latitude, longitude, h3_index,
+				deviation_meters, heading, speed_kmh, created_at, event_type
+			) VALUES ($1, $2, $3, $4, $5, $6, 90, 40, $7, 'actual_path')
+			ON CONFLICT DO NOTHING`
+
+		for idx, pt := range actualCoords {
 			lng, lat := pt[0], pt[1]
 			h3Index := indexer.LatLngToCell(lat, lng)
 
-			devMeters := 15.0
-			if req.IsDeviated {
-				devMeters = 120.0
+			// Compute distance from this actual point to nearest planned segment (meters)
+			devMeters := 0.0
+			if len(plannedCoords) > 1 {
+				minD := math.MaxFloat64
+				for j := 0; j < len(plannedCoords)-1; j++ {
+					d := pointSegDistM(pt, plannedCoords[j], plannedCoords[j+1])
+					if d < minD {
+						minD = d
+					}
+				}
+				devMeters = minD
 			}
 
 			ptTime := now.Add(time.Duration(idx) * time.Second)
-
-			_, errInst := w.pool.Exec(r.Context(), `
-				INSERT INTO deviation_events (
-					driver_id, trip_id, latitude, longitude, h3_index,
-					deviation_meters, heading, speed_kmh, created_at
-				) VALUES ($1, $2, $3, $4, $5, $6, 90, 40, $7)
-			`, req.DriverID, req.TripID, lat, lng, h3Index, devMeters, ptTime)
-
+			_, errInst := w.pool.Exec(r.Context(), insertActual,
+				req.DriverID, req.TripID, lat, lng, h3Index, devMeters, ptTime)
 			if errInst != nil {
-				slog.Warn("failed to insert deviation_event point", "error", errInst, "trip_id", req.TripID)
+				slog.Warn("failed to insert actual_path event", "error", errInst, "trip_id", req.TripID)
 			}
 		}
-		slog.Info("inserted trip points into deviation_events", "trip_id", req.TripID, "points", len(routeCoords))
+		slog.Info("inserted actual_path points", "trip_id", req.TripID, "points", len(actualCoords))
 	}
 
 	// Fetch created_at timestamp
@@ -966,3 +1020,140 @@ func (w *PostgresWriter) HandleHourlyStatsQuery(wr http.ResponseWriter, r *http.
 	})
 }
 
+// ── Geometry helper ────────────────────────────────────────────────────────────
+
+// pointSegDistM returns the approximate distance in metres from point p to the
+// line segment a→b, using a flat-earth approximation suitable for short segments
+// (< a few km). Coordinates are [lng, lat] in degrees.
+func pointSegDistM(p, a, b [2]float64) float64 {
+	// Convert degrees to rough metres using equatorial approximation
+	const degToM = 111_320.0 // metres per degree of latitude
+	px := (p[0] - a[0]) * degToM * math.Cos(a[1]*math.Pi/180)
+	py := (p[1] - a[1]) * degToM
+	dx := (b[0] - a[0]) * degToM * math.Cos(a[1]*math.Pi/180)
+	dy := (b[1] - a[1]) * degToM
+
+	segLen2 := dx*dx + dy*dy
+	if segLen2 == 0 {
+		return math.Sqrt(px*px + py*py)
+	}
+	t := math.Max(0, math.Min(1, (px*dx+py*dy)/segLen2))
+	ex := px - t*dx
+	ey := py - t*dy
+	return math.Sqrt(ex*ex + ey*ey)
+}
+
+// ── HandleActualPathQuery ──────────────────────────────────────────────────────
+
+// HandleActualPathQuery handles GET /api/actual-path?from=<unix_ms>&to=<unix_ms>&driver_id=<id>
+// Returns H3 cell aggregates of deviation events — the road segments drivers actually
+// travelled when they went off the OSRM planned route. Powers the "Hex Tài Xế Đi"
+// layer in the admin dashboard, useful for identifying alternative routes and
+// improving future route planning.
+func (w *PostgresWriter) HandleActualPathQuery(wr http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		wr.WriteHeader(http.StatusOK)
+		return
+	}
+
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+	driverID := r.URL.Query().Get("driver_id")
+
+	fromTime := time.Unix(0, 0)
+	toTime := time.Now().Add(24 * time.Hour)
+
+	if fromStr != "" {
+		if fromMS, err := strconv.ParseInt(fromStr, 10, 64); err == nil {
+			fromTime = time.UnixMilli(fromMS)
+		}
+	}
+	if toStr != "" {
+		if toMS, err := strconv.ParseInt(toStr, 10, 64); err == nil {
+			toTime = time.UnixMilli(toMS)
+		}
+	}
+
+	var (
+		rows     pgx.Rows
+		queryErr error
+	)
+
+	if driverID != "" {
+		queryErr = func() error {
+			var err error
+			rows, err = w.pool.Query(r.Context(), `
+				SELECT
+					h3_index,
+					intensity,
+					last_updated,
+					1              AS unique_drivers,
+					unique_trips
+				FROM mv_deviation_h3_by_driver
+				WHERE driver_id = $3
+				  AND last_updated >= $1 AND first_seen <= $2
+				ORDER BY intensity DESC
+			`, fromTime, toTime, driverID)
+			return err
+		}()
+	} else {
+		queryErr = func() error {
+			var err error
+			rows, err = w.pool.Query(r.Context(), `
+				SELECT
+					h3_index,
+					intensity,
+					last_updated,
+					unique_drivers,
+					unique_trips
+				FROM mv_deviation_h3_cells
+				WHERE last_updated >= $1 AND first_seen <= $2
+				ORDER BY intensity DESC
+			`, fromTime, toTime)
+			return err
+		}()
+	}
+
+	if queryErr != nil {
+		slog.Error("actual-path query failed", "error", queryErr)
+		http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type cellResult struct {
+		H3Index       string `json:"h3_index"`
+		Intensity     int    `json:"intensity"`
+		LastUpdated   int64  `json:"last_updated"`
+		UniqueDrivers int    `json:"unique_drivers"`
+		UniqueTrips   int    `json:"unique_trips"`
+	}
+
+	var cells []cellResult
+	for rows.Next() {
+		var c cellResult
+		var lastUpdated time.Time
+		if err := rows.Scan(&c.H3Index, &c.Intensity, &lastUpdated, &c.UniqueDrivers, &c.UniqueTrips); err != nil {
+			slog.Error("actual-path scan failed", "error", err)
+			continue
+		}
+		c.LastUpdated = lastUpdated.UnixMilli()
+		cells = append(cells, c)
+	}
+
+	if cells == nil {
+		cells = []cellResult{}
+	}
+
+	wr.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(wr).Encode(map[string]interface{}{
+		"cells":       cells,
+		"total_cells": len(cells),
+		"query": map[string]interface{}{
+			"from":      fromTime.UnixMilli(),
+			"to":        toTime.UnixMilli(),
+			"driver_id": driverID,
+			"type":      "deviation",
+		},
+	})
+}

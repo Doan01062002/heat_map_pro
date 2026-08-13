@@ -9,14 +9,15 @@ import HeatmapLayer from './HeatmapLayer';
 const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 const PORTO_CENTER = [-8.6291, 41.1579];
 
-export default function MapContainer({ points = [], selectedTrip = null }) {
+export default function MapContainer({ points = [], selectedTrip = null, actualPathCells = [] }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const [mapLoaded, setMapLoaded] = useState(false);
 
   // Layer Visibility Toggle States
   const [show3DH3Grid, setShow3DH3Grid] = useState(true);
-  const [showHeatmap, setShowHeatmap]   = useState(true);
+  const [showHeatmap, setShowHeatmap] = useState(true);
+  const [showActualPath, setShowActualPath] = useState(false); // "Hex Tài Xế Đi" — off by default
 
   useEffect(() => {
     let map;
@@ -66,6 +67,8 @@ export default function MapContainer({ points = [], selectedTrip = null }) {
           selectedTrip={selectedTrip}
           showHeatmap={showHeatmap}
           show3DH3Grid={show3DH3Grid}
+          showActualPath={showActualPath}
+          actualPathCells={actualPathCells}
         />
       )}
 
@@ -107,6 +110,33 @@ export default function MapContainer({ points = [], selectedTrip = null }) {
           }}
         >
           Lưới 3D H3 (~3m) <span style={{ opacity: 0.8, fontSize: '10px' }}>{show3DH3Grid ? 'ON' : 'OFF'}</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setShowActualPath(v => !v);
+            // Auto-disable hex bẻ lái when enabling actual path to avoid visual clutter
+            if (!showActualPath) setShow3DH3Grid(false);
+          }}
+          style={{
+            background: showActualPath
+              ? 'linear-gradient(135deg, #4527a0, #1a237e)'
+              : 'rgba(255,255,255,0.08)',
+            color: '#fff',
+            border: showActualPath ? '1px solid #9575cd' : '1px solid rgba(255,255,255,0.1)',
+            borderRadius: '20px',
+            padding: '6px 14px',
+            fontSize: '12px',
+            fontWeight: 600,
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            boxShadow: showActualPath ? '0 0 12px rgba(69,39,160,0.6)' : 'none',
+            transition: 'all 0.25s ease',
+          }}
+        >
+          Đường Tài Xế Lệch Plan <span style={{ opacity: 0.8, fontSize: '10px' }}>{showActualPath ? 'ON' : 'OFF'}</span>
         </button>
 
         <button

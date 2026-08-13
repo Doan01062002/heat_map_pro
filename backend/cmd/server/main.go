@@ -3,6 +3,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -158,6 +160,9 @@ func main() {
 	// Hourly avoidance statistics for 24-hour chart
 	mux.HandleFunc("GET /api/hourly-stats", pgWriter.HandleHourlyStatsQuery)
 
+	// Actual-path H3 cells: roads drivers chose when deviating (for "Hex Tài Xế Đi" layer)
+	mux.HandleFunc("GET /api/actual-path", pgWriter.HandleActualPathQuery)
+
 	// AI Agent Investigation Proxy
 	mux.HandleFunc("POST /api/ai/investigate", func(w http.ResponseWriter, r *http.Request) {
 		aiURL := os.Getenv("AI_AGENT_URL")
@@ -194,7 +199,25 @@ func main() {
 	// ---- Start HTTP Server ----
 	addr := fmt.Sprintf("%s:%d", cfg.BackendHost, cfg.BackendPort)
 
-	// CORS middleware for development (frontend on different port)
+	// CORS + Gzip middleware stack
+	// Gzip compresses JSON responses ~80%, critical for large payloads like
+	// the actual-path endpoint returning 3000+ H3 cells.
+	gzipHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		gz, err := gzip.NewWriterLevel(w, gzip.BestSpeed)
+		if err != nil {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		defer gz.Close()
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Del("Content-Length")
+		mux.ServeHTTP(gzipResponseWriter{ResponseWriter: w, Writer: gz}, r)
+	})
+
 	corsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -205,7 +228,7 @@ func main() {
 			return
 		}
 
-		mux.ServeHTTP(w, r)
+		gzipHandler.ServeHTTP(w, r)
 	})
 
 	server := &http.Server{
@@ -241,4 +264,14 @@ func main() {
 	}
 
 	slog.Info("server stopped")
+}
+
+// gzipResponseWriter wraps http.ResponseWriter to write through a gzip.Writer.
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	Writer *gzip.Writer
+}
+
+func (g gzipResponseWriter) Write(b []byte) (int, error) {
+	return g.Writer.Write(b)
 }
