@@ -65,6 +65,7 @@ async def run_osrm_standalone_tests():
     print("==========================================================================")
     print(f"📊 KẾT QUẢ ĐÁNH GIÁ OSRM TOOL: {passed_count}/{total_count} PASSED ({passed_count/total_count*100:.1f}%)")
     print("==========================================================================")
+    return passed_count, total_count
 
 if __name__ == "__main__":
     asyncio.run(run_osrm_standalone_tests())

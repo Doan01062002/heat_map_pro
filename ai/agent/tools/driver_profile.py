@@ -9,20 +9,22 @@ async def query_driver_profile(
     driver_id: Optional[str] = None,
     h3_index: Optional[str] = None,
     lat: float = 0.0,
-    lng: float = 0.0
+    lng: float = 0.0,
+    deviation_threshold_m: float = 150.0,
 ) -> DriverProfileEvidence:
     """
     Query PostgreSQL for 30-day system-wide route compliance and reputation level
     of the target driver OR the specific group of drivers who detoured in the target H3 cell.
     Uses Composite Index (idx_deviation_driver_created) for ultra-fast ~2ms execution.
+    Accepts dynamic deviation_threshold_m from the road-class-aware AASHTO engine.
     100% Zero Hardcoding.
     """
     # 1. Query individual driver total system-wide compliance (entire dataset history)
-    query_individual = """
+    query_individual = f"""
         SELECT
             COUNT(*)::INT AS total_events,
             COUNT(DISTINCT trip_id)::INT AS total_trips,
-            COUNT(DISTINCT CASE WHEN deviation_meters > 150 THEN trip_id END)::INT AS deviated_trips
+            COUNT(DISTINCT CASE WHEN deviation_meters > {deviation_threshold_m} THEN trip_id END)::INT AS deviated_trips
         FROM deviation_events
         WHERE driver_id = $1;
     """
@@ -34,19 +36,19 @@ async def query_driver_profile(
     min_lat, max_lat = lat - delta, lat + delta
     min_lng, max_lng = lng - delta, lng + delta
 
-    query_cell_compliance = """
+    query_cell_compliance = f"""
         SELECT
             COUNT(DISTINCT trip_id)::INT AS total_trips,
-            COUNT(DISTINCT CASE WHEN deviation_meters > 150 THEN trip_id END)::INT AS deviated_trips
+            COUNT(DISTINCT CASE WHEN deviation_meters > {deviation_threshold_m} THEN trip_id END)::INT AS deviated_trips
         FROM deviation_events
         WHERE (h3_index = $1 OR (latitude BETWEEN $2 AND $3 AND longitude BETWEEN $4 AND $5));
     """
 
     # 3. Dynamic System-wide Network Baseline Query (Zero hardcoding fallback)
-    query_network_baseline = """
+    query_network_baseline = f"""
         SELECT
             COUNT(DISTINCT trip_id)::INT AS total_trips,
-            COUNT(DISTINCT CASE WHEN deviation_meters > 150 THEN trip_id END)::INT AS deviated_trips
+            COUNT(DISTINCT CASE WHEN deviation_meters > {deviation_threshold_m} THEN trip_id END)::INT AS deviated_trips
         FROM deviation_events;
     """
 

@@ -19,19 +19,24 @@ async def run_investigation(req: InvestigateRequest) -> DiagnosisResult:
     """
     print(f"[ReAct Engine] Investigating cell {req.h3_index} at ({req.lat}, {req.lng}) at timestamp {req.timestamp_ms}...")
 
-    # Step 1: Concurrently gather initial telemetry, weather, geocode, driver profile, and OSRM alternatives
-    telemetry, weather, location_name, driver_profile = await asyncio.gather(
+    # Step 1: Concurrently gather initial telemetry, weather, and geocode
+    telemetry, weather, location_name = await asyncio.gather(
         query_telemetry(req.h3_index, req.lat, req.lng, req.time_window_minutes, req.timestamp_ms),
         fetch_weather(req.lat, req.lng, req.timestamp_ms),
         reverse_geocode(req.lat, req.lng),
-        query_driver_profile(req.driver_id, req.h3_index, req.lat, req.lng),
     )
 
-    # Step 2: Run secondary tools using initial telemetry data
-    end_lat = req.lat + 0.005
-    end_lng = req.lng + 0.005
+    # Step 2: Run secondary tools using telemetry (including dynamic threshold for driver profile)
+    # Use actual trip end point if provided; fallback to a small offset in the same lat direction
+    # (avoids the bug of always analyzing a fixed NE direction regardless of actual driver path)
+    end_lat = req.end_lat if req.end_lat is not None else req.lat + 0.003
+    end_lng = req.end_lng if req.end_lng is not None else req.lng
 
-    osrm_alts, traffic_speed = await asyncio.gather(
+    driver_profile, osrm_alts, traffic_speed = await asyncio.gather(
+        query_driver_profile(
+            req.driver_id, req.h3_index, req.lat, req.lng,
+            deviation_threshold_m=telemetry.dynamic_threshold_m,
+        ),
         analyze_osrm_alternatives(req.lat, req.lng, end_lat, end_lng),
         analyze_traffic_speed(req.h3_index, telemetry.avg_speed_kmh, req.lat, req.lng, req.timestamp_ms),
     )

@@ -1,8 +1,12 @@
 import os
 import json
 import httpx
+import logging
+import asyncio
 from typing import Optional
 from models import Evidence, DiagnosisResult
+
+logger = logging.getLogger("ai_agent.llm_client")
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
@@ -102,41 +106,49 @@ Thời điểm chuyến xe/sự kiện: {evidence.target_time_str}
 
     # Option 1: Call Groq API if GROQ_API_KEY is present (Ultra fast LLaMA 3.3 70B)
     if GROQ_API_KEY:
-        try:
-            url = "https://api.groq.com/openai/v1/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "model": "llama-3.3-70b-versatile",
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "response_format": {"type": "json_object"},
-                "temperature": 0.1,
-            }
+        for attempt in range(3):  # max 3 attempts for 429/503
+            try:
+                url = "https://api.groq.com/openai/v1/chat/completions"
+                headers = {
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                    "Content-Type": "application/json",
+                }
+                payload = {
+                    "model": "llama-3.3-70b-versatile",
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.1,
+                }
 
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(url, json=payload, headers=headers)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    content = data["choices"][0]["message"]["content"]
-                    result_json = json.loads(content)
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    resp = await client.post(url, json=payload, headers=headers)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        content = data["choices"][0]["message"]["content"]
+                        result_json = json.loads(content)
 
-                    return DiagnosisResult(
-                        h3_index=h3_index,
-                        risk_level=result_json.get("risk_level", "SAFE_FORCE_MAJEURE"),
-                        confidence=float(result_json.get("confidence", 0.95)),
-                        summary=result_json.get("summary", "Đã phân tích bằng chứng thực tế qua Groq AI."),
-                        evidence=evidence,
-                        recommendation=result_json.get("recommendation", "Theo dõi khu vực."),
-                    )
-                else:
-                    print(f"[LLM Client] Groq HTTP {resp.status_code}: {resp.text}")
-        except Exception as e:
-            print(f"[LLM Client] Groq API call error: {e}")
+                        return DiagnosisResult(
+                            h3_index=h3_index,
+                            risk_level=result_json.get("risk_level", "SAFE_FORCE_MAJEURE"),
+                            confidence=float(result_json.get("confidence", 0.95)),
+                            summary=result_json.get("summary", "Đã phân tích bằng chứng thực tế qua Groq AI."),
+                            evidence=evidence,
+                            recommendation=result_json.get("recommendation", "Theo dõi khu vực."),
+                        )
+                    elif resp.status_code in (429, 503) and attempt < 2:
+                        wait_sec = 2 ** attempt  # 1s, 2s backoff
+                        logger.warning("[LLM Groq] HTTP %d rate-limit — retry %d/2 after %ds", resp.status_code, attempt + 1, wait_sec)
+                        await asyncio.sleep(wait_sec)
+                        continue
+                    else:
+                        logger.error("[LLM Groq] HTTP %d: %s", resp.status_code, resp.text[:200])
+                        break
+            except Exception as e:
+                logger.error("[LLM Groq] API call error on attempt %d: %s", attempt + 1, e)
+                break
 
     # Option 2: Attempt Gemini API call if GEMINI_API_KEY present
     if GEMINI_API_KEY:
@@ -165,7 +177,7 @@ Thời điểm chuyến xe/sự kiện: {evidence.target_time_str}
                     recommendation=result_json.get("recommendation", "Theo dõi khu vực."),
                 )
         except Exception as e:
-            print(f"[LLM Client] Gemini API call error: {e}")
+            logger.error("[LLM Gemini] API call error: %s", e)
 
     # Option 3: Fallback reasoning logic if LLM APIs are unavailable or key not set
     return _rule_based_fallback(h3_index, evidence)

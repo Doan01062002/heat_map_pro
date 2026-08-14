@@ -56,7 +56,18 @@ def is_within_temporal_window(pub_date_str: str, target_timestamp_ms: Optional[i
     Eliminates 100% of out-of-date contextual noise (e.g. articles from next month or last year).
     """
     if not target_timestamp_ms or target_timestamp_ms <= 0:
-        return True  # If real-time mode, allow recent news
+        # Real-time mode: only allow articles published within the last 72 hours
+        if not pub_date_str:
+            return True
+        try:
+            pub_dt = parsedate_to_datetime(pub_date_str)
+            if pub_dt.tzinfo is None:
+                pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+            now_dt = datetime.now(tz=timezone.utc)
+            diff_hours = (now_dt - pub_dt).total_seconds() / 3600.0
+            return diff_hours <= 72.0
+        except Exception:
+            return True
 
     if not pub_date_str:
         return True

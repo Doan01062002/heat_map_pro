@@ -309,6 +309,10 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps, points = []) {
                 lng: centerLng,
                 time_window_minutes: 60,
                 timestamp_ms: targetTimeMs,
+                // Pass the far edge of the H3 cell as the approximate trip end point
+                // so OSRM can analyze a meaningful directional route instead of a fixed NE offset
+                end_lat: maxLat || (centerLat + 0.003),
+                end_lng: maxLng || centerLng,
               }),
             });
 
