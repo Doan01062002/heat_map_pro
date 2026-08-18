@@ -84,20 +84,35 @@ export async function fetchOSRMRoute(origin, destination) {
   };
 }
 
-// Match-snap user drawn waypoints to actual road network via OSRM Match API
+// Match-snap user drawn waypoints to actual road network via OSRM Route & Match APIs
 export async function matchRouteOSRM(waypoints) {
   if (!waypoints || waypoints.length < 2) return waypoints || [];
 
   const osrmBase = import.meta.env.VITE_OSRM_URL || 'https://router.project-osrm.org';
-  const samplePts = waypoints.length > 80 
-    ? waypoints.filter((_, idx) => idx % Math.ceil(waypoints.length / 80) === 0)
+  const samplePts = waypoints.length > 60 
+    ? waypoints.filter((_, idx) => idx % Math.ceil(waypoints.length / 60) === 0)
     : waypoints;
 
   const coordsStr = samplePts.map(w => `${w[0]},${w[1]}`).join(';');
-  const url = `${osrmBase}/match/v1/driving/${coordsStr}?overview=full&geometries=geojson`;
 
+  // 1. Try OSRM /route API through waypoints (ideal for sparse user-clicked points)
   try {
-    const res = await fetch(url);
+    const routeUrl = `${osrmBase}/route/v1/driving/${coordsStr}?overview=full&geometries=geojson&continue_straight=true`;
+    const res = await fetch(routeUrl);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.routes && data.routes.length > 0 && data.routes[0].geometry?.coordinates?.length > 0) {
+        return data.routes[0].geometry.coordinates;
+      }
+    }
+  } catch (err) {
+    console.warn('[OSRM Route Snap Error, trying match API]', err);
+  }
+
+  // 2. Fallback to OSRM /match API
+  try {
+    const matchUrl = `${osrmBase}/match/v1/driving/${coordsStr}?overview=full&geometries=geojson`;
+    const res = await fetch(matchUrl);
     if (res.ok) {
       const data = await res.json();
       if (data.matchings && data.matchings.length > 0) {
@@ -107,6 +122,7 @@ export async function matchRouteOSRM(waypoints) {
   } catch (err) {
     console.warn('[OSRM Match Error]', err);
   }
+
   return waypoints;
 }
 

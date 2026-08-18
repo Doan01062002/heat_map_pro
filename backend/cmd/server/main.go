@@ -203,7 +203,7 @@ func main() {
 	// Gzip compresses JSON responses ~80%, critical for large payloads like
 	// the actual-path endpoint returning 3000+ H3 cells.
 	gzipHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		if r.Header.Get("Upgrade") == "websocket" || strings.HasPrefix(r.URL.Path, "/ws") || !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			mux.ServeHTTP(w, r)
 			return
 		}
