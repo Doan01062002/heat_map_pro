@@ -195,8 +195,8 @@ graph TD
 |---|---|---|---|
 | **FR-API-01** | `/api/health` | GET | Trạng thái server, uptime và số tài xế đang hoạt động |
 | **FR-API-02** | `/api/auth/register` | POST | Đăng ký tài khoản tài xế mới |
-| **FR-API-03** | `/api/auth/login` | POST | Xác thực tài xế, trả về JWT token |
-| **FR-API-04** | `/api/auth/me` | GET | Hồ sơ tài xế đã xác thực (yêu cầu JWT) |
+| **FR-API-03** | `/api/auth/login` | POST | Xác thực tài xế, trả về auth session token |
+| **FR-API-04** | `/api/auth/me` | GET | Hồ sơ tài xế đã xác thực (yêu cầu Authorization Bearer token hoặc query driver_id) |
 | **FR-API-05** | `/api/trips` | POST | Lưu chuyến đi mới vào PostgreSQL và broadcast sự kiện |
 | **FR-API-06** | `/api/trips` | GET | Danh sách chuyến đi, lọc theo `driver_id` và `limit` |
 | **FR-API-07** | `/api/history` | GET | Dữ liệu heatmap H3 tổng hợp, lọc theo thời gian và `driver_id` |
@@ -206,17 +206,18 @@ graph TD
 | **FR-API-11** | `/api/road-stats` | GET | Thống kê đoạn đường (dùng trong popup khi nhấp bản đồ) |
 | **FR-API-12** | `/api/hourly-stats` | GET | Thống kê lệch lộ trình và số tài xế theo 24 giờ |
 | **FR-API-13** | `/api/ai/investigate` | POST | Ủy quyền điều tra tới Python AI Agent |
+| **FR-API-14** | `/api/actual-path` | GET | Dữ liệu ô H3 tổng hợp từ lộ trình thực tế tài xế đi khi bẻ lái (phục vụ lớp "Hex Tài Xế Đi") |
 
 ### 4.6 AI Agent (FR-AI)
 
 | ID | Yêu Cầu |
 |---|---|
 | **FR-AI-01** | AI Agent PHẢI cung cấp endpoint `POST /investigate` nhận chỉ số ô H3, tọa độ, Driver ID và cửa sổ thời gian. |
-| **FR-AI-02** | AI Agent PHẢI đồng thời thực thi: Weather API, Reverse Geocode, DB Telemetry, Driver Profile theo mẫu **ReAct**. |
+| **FR-AI-02** | AI Agent PHẢI đồng thời thực thi: Weather API, Reverse Geocode, DB Telemetry (làm mịn Bayes & Wilson 95% CI), Driver Profile theo mẫu **ReAct**. |
 | **FR-AI-03** | AI Agent PHẢI chạy công cụ thứ cấp (OSRM Alternatives, Traffic Speed) dựa trên kết quả công cụ sơ cấp. |
 | **FR-AI-04** | AI Agent PHẢI kích hoạt **tìm kiếm tin tức/sự cố** nếu phát hiện nhiều chuyến đi lệch cao, tắc nghẽn nghiêm trọng hoặc mưa lớn. |
-| **FR-AI-05** | AI Agent PHẢI gọi LLM (Groq hoặc Gemini) với toàn bộ bằng chứng thu thập để tạo chẩn đoán có căn cứ. |
-| **FR-AI-06** | AI Agent PHẢI trả về `DiagnosisResult` gồm: mức rủi ro, điểm tin cậy, tóm tắt, bằng chứng JSON, khuyến nghị. |
+| **FR-AI-05** | AI Agent PHẢI gọi LLM (Groq LLaMA 3.3 70B hoặc Gemini 2.5 Flash, hoặc Rule-based fallback) với toàn bộ bằng chứng thu thập để tạo chẩn đoán có căn cứ. |
+| **FR-AI-06** | AI Agent PHẢI trả về `DiagnosisResult` gồm: mức rủi ro (`SAFE_FORCE_MAJEURE`, `SUSPICIOUS`, `FRAUD_ALERT`), điểm tin cậy, tóm tắt, bằng chứng JSON, khuyến nghị. |
 | **FR-AI-07** | Kết quả điều tra PHẢI được lưu vào bảng `ai_investigations` trong PostgreSQL. |
 
 ---
@@ -363,6 +364,8 @@ erDiagram
 | `speed_kmh` | REAL DEFAULT 0 | Tốc độ xe (km/h) |
 | `risk_label` | VARCHAR(30) DEFAULT 'unclassified' | Phân loại rủi ro do AI gán |
 | `ai_confidence` | REAL DEFAULT 0 | Điểm tin cậy AI (0.0–1.0) |
+| `event_type` | VARCHAR(20) DEFAULT 'deviation' | Loại sự kiện: `'deviation'` (điểm lệch khỏi lộ trình) hoặc `'actual_path'` (đoạn đường thực tế tài xế đã đi) |
+| `geog` | GEOGRAPHY(Point, 4326) | Đối tượng địa lý PostGIS hỗ trợ truy vấn không gian nhanh bằng GIST index |
 | `created_at` | TIMESTAMPTZ NOT NULL DEFAULT NOW() | Thời điểm xảy ra sự kiện lệch |
 
 #### Bảng `trips` — Đăng Ký Chuyến Đi
@@ -376,9 +379,11 @@ erDiagram
 | `destination_json` | JSONB | Điểm đến `{lat, lng, label}` |
 | `waypoints_json` | JSONB | Mảng tọa độ lộ trình kế hoạch |
 | `actual_route_json` | JSONB | Mảng tọa độ lộ trình GPS thực tế |
+| `planned_route_json` | JSONB | Mảng tọa độ lộ trình gợi ý chuẩn từ OSRM |
 | `distance_km` | DOUBLE PRECISION | Tổng khoảng cách lộ trình (km) |
 | `duration_min` | INTEGER | Thời gian chuyến đi ước tính (phút) |
 | `is_deviated` | BOOLEAN | Tài xế có lệch khỏi kế hoạch không |
+| `deviation_ratio` | REAL DEFAULT 0.0 | Tỷ lệ phần trăm quãng đường thực tế bị lệch khỏi lộ trình chuẩn (0.0 - 1.0) |
 | `status` | VARCHAR(20) DEFAULT 'active' | Trạng thái chuyến đi |
 
 #### Bảng `drivers` — Tài Khoản Tài Xế

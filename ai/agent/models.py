@@ -8,6 +8,8 @@ class InvestigateRequest(BaseModel):
     time_window_minutes: int = Field(default=60, description="Time window for telemetry analysis in minutes")
     timestamp_ms: Optional[int] = Field(default=None, description="Epoch milliseconds timestamp of the drivers/trips being analyzed")
     driver_id: Optional[str] = Field(default=None, description="Optional target driver ID")
+    end_lat: Optional[float] = Field(default=None, description="Latitude of trip destination for OSRM route analysis")
+    end_lng: Optional[float] = Field(default=None, description="Longitude of trip destination for OSRM route analysis")
 
 class WeatherEvidence(BaseModel):
     temperature: Optional[float] = None
