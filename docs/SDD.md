@@ -115,7 +115,7 @@ backend/
 │   ├── websocket/
 │   │   └── hub.go           # Admin WebSocket hub + Redis subscriber
 │   └── auth/
-│       ├── repository.go    # Truy vấn DB cho tài khoản tài xế
+│       ├── auth.go          # Entity, Repository truy vấn DB & tạo mã định danh tài xế
 │       └── handler.go       # HTTP handlers: Register / Login / Me
 ├── gen/heatmap/v1/          # Code Go sinh ra từ Protobuf (KHÔNG CHỈNH SỬA)
 └── proto/heatmap/v1/
@@ -432,15 +432,19 @@ graph TD
 | `selectedTrip` | Object \| null | Chuyến đi đang hiển thị trên bản đồ |
 | `connectionStatus` | String | `connecting` / `connected` / `disconnected` |
 
-### 4.3 Hook Dùng Chung: `useWebSocket`
+### 4.3 Các Custom Hooks Frontend
 
-Đặt tại `hooks/useWebSocket.js` trong mỗi ứng dụng (độc lập, không cross-import).
+- **Driver Simulator (`frontend/simulator/src/hooks/useWebSocket.js`):**
+  - Mở kết nối WebSocket tới URL `/ws/driver`.
+  - Hỗ trợ gửi tin nhắn batch `send({ points })`.
+  - Tự động kết nối lại (reconnect) với exponential-backoff khi mất kết nối.
+  - Cung cấp `{ connectionStatus, send }`.
 
-**Hành vi:**
-- Tạo kết nối WebSocket tới URL được cung cấp.
-- Triển khai exponential-backoff reconnection khi mất kết nối.
-- Cung cấp `{ connectionStatus, send, lastMessage }`.
-- Dọn dẹp khi component unmount.
+- **Admin Dashboard (`frontend/admin/src/hooks/useHeatmapStream.js`):**
+  - Mở kết nối WebSocket tới URL `/ws/admin`.
+  - Nhận và tổng hợp `HeatmapUpdate` delta từ backend vào local state.
+  - Lắng nghe sự kiện `new_trip` để kích hoạt Toast Notification và cập nhật danh sách chuyến đi live theo thời gian thực.
+  - Cung cấp `{ cells, stats, connectionStatus, clearCells }`.
 
 ---
 
@@ -508,6 +512,8 @@ flowchart TD
 | `idx_deviation_events_h3_index` | `deviation_events` | `h3_index` | Tổng hợp theo ô H3 |
 | `idx_deviation_events_driver_id` | `deviation_events` | `(driver_id, created_at DESC)` | Truy vấn thời gian theo tài xế |
 | `idx_deviation_events_h3_time` | `deviation_events` | `(h3_index, created_at DESC)` | Truy vấn kết hợp ô + thời gian |
+| `idx_deviation_events_type_h3_time` | `deviation_events` | `(event_type, h3_index, created_at DESC)` | Lọc ô H3 lộ trình thực tế tài xế đi (`actual_path`) |
+| `idx_deviation_events_geog` | `deviation_events` | `geog USING GIST` | Truy vấn không gian nhanh `ST_DWithin` cho road-stats popup |
 | `idx_deviation_driver_created` | `deviation_events` | `(driver_id, created_at) INCLUDE(...)` | Truy vấn danh tiếng tài xế 30 ngày |
 | `idx_deviation_h3_created` | `deviation_events` | `(h3_index, created_at) INCLUDE(...)` | Truy vấn tuân thủ ô |
 | `idx_trips_driver_id` | `trips` | `driver_id` | Tra cứu chuyến đi theo tài xế |
@@ -519,7 +525,7 @@ flowchart TD
 ### 6.2 View và Function SQL
 
 ```sql
--- View tổng hợp sẵn cho truy vấn dashboard
+-- View tổng hợp sẵn cho heatmap độ lệch (chỉ lọc event_type = 'deviation')
 CREATE OR REPLACE VIEW heatmap_summary AS
 SELECT
     h3_index,
@@ -527,15 +533,39 @@ SELECT
     MAX(created_at)            AS last_updated,
     COUNT(DISTINCT driver_id)  AS unique_drivers
 FROM deviation_events
+WHERE event_type = 'deviation'
+GROUP BY h3_index;
+
+-- View tổng hợp lộ trình thực tế tài xế chọn khi bẻ lái
+CREATE OR REPLACE VIEW actual_path_summary AS
+SELECT
+    h3_index,
+    COUNT(*)::INTEGER          AS intensity,
+    MAX(created_at)            AS last_updated,
+    COUNT(DISTINCT driver_id)  AS unique_drivers,
+    COUNT(DISTINCT trip_id)    AS unique_trips
+FROM deviation_events
+WHERE event_type = 'actual_path'
 GROUP BY h3_index;
 
 -- Function được gọi bởi GET /api/history (không có filter driver)
 CREATE OR REPLACE FUNCTION get_heatmap_for_period(p_from TIMESTAMPTZ, p_to TIMESTAMPTZ)
 RETURNS TABLE (h3_index VARCHAR(20), intensity INTEGER,
                last_updated TIMESTAMPTZ, unique_drivers INTEGER)
--- Khi có filter driver_id, dùng dynamic WHERE clause:
--- WHERE created_at >= $1 AND created_at <= $2 AND driver_id = $3
--- GROUP BY h3_index ORDER BY intensity DESC
+LANGUAGE SQL STABLE
+AS $$
+    SELECT
+        de.h3_index,
+        COUNT(*)::INTEGER                     AS intensity,
+        MAX(de.created_at)                    AS last_updated,
+        COUNT(DISTINCT de.driver_id)::INTEGER AS unique_drivers
+    FROM deviation_events de
+    WHERE de.created_at >= p_from
+      AND de.created_at <= p_to
+      AND de.event_type = 'deviation'
+    GROUP BY de.h3_index
+    ORDER BY intensity DESC;
+$$;
 ```
 
 ---
@@ -625,6 +655,40 @@ RETURNS TABLE (h3_index VARCHAR(20), intensity INTEGER,
 }
 ```
 
+#### `GET /api/actual-path`
+
+Truy vấn dữ liệu ô H3 tổng hợp từ lộ trình thực tế tài xế chọn khi bẻ lái (phục vụ lớp "Hex Tài Xế Đi").
+
+**Tham số truy vấn:**
+
+| Tham Số | Kiểu | Bắt Buộc | Mô Tả |
+|---|---|---|---|
+| `from` | int64 (unix ms) | Không | Thời điểm bắt đầu |
+| `to` | int64 (unix ms) | Không | Thời điểm kết thúc |
+| `driver_id` | string | Không | Lọc theo tài xế cụ thể |
+
+**Response:**
+```json
+{
+  "cells": [
+    {
+      "h3_index": "882830828bfffff",
+      "intensity": 28,
+      "last_updated": 1723264000000,
+      "unique_drivers": 4,
+      "unique_trips": 6
+    }
+  ],
+  "total_cells": 1,
+  "query": {
+    "from": 1723200000000,
+    "to": 1723264000000,
+    "driver_id": "",
+    "type": "deviation"
+  }
+}
+```
+
 #### `POST /api/ai/investigate`
 
 **Request Body:**
@@ -642,12 +706,25 @@ RETURNS TABLE (h3_index VARCHAR(20), intensity INTEGER,
 **Response:**
 ```json
 {
-  "risk_level": "HIGH",
-  "confidence": 0.87,
-  "summary": "Phát hiện lệch lộ trình đáng kể tại khu vực này do ngập lụt trên đường Nguyễn Văn Trỗi, kết hợp với tai nạn 3 xe được báo cáo lúc 14:30. 12 trong 18 tài xế trong ô H3 này đã chọn lộ trình thay thế qua đường Cộng Hòa.",
-  "evidence_json": { "weather": {}, "news": [], "fleet_telemetry": {} },
-  "recommendation": "Đề xuất tạm thời quy hoạch lại lộ trình qua đường Trường Sơn. Cảnh báo tài xế chủ động.",
-  "location_name": "Nguyễn Văn Trỗi, Phú Nhuận, TP.HCM"
+  "h3_index": "882830828bfffff",
+  "risk_level": "SAFE_FORCE_MAJEURE",
+  "confidence": 0.95,
+  "summary": "Tài xế né tránh hợp lý tại Nguyễn Văn Trỗi, Phú Nhuận do kẹt xe nghiêm trọng (tốc độ giảm 72%) kết hợp mưa lớn (12mm/h).",
+  "evidence": {
+    "weather": { "temperature": 27.5, "rain_mm": 12.0, "description": "Heavy Rain" },
+    "news": [],
+    "fleet_telemetry": {
+      "total_events": 45,
+      "unique_drivers": 6,
+      "unique_trips": 8,
+      "high_dev_trips": 6,
+      "fleet_deviation_ratio": 0.75,
+      "adjusted_deviation_ratio": 0.71,
+      "margin_of_error": 0.18
+    },
+    "location_name": "Nguyễn Văn Trỗi, Phú Nhuận, TP.HCM"
+  },
+  "recommendation": "Tạm thời cập nhật OSRM bypass đoạn đường này. KHÔNG phạt tài xế."
 }
 ```
 
@@ -749,12 +826,13 @@ npm run start
 
 Nginx đóng vai trò điểm vào duy nhất (Port 80):
 
-| Route | Đích |
-|---|---|
-| `/api/*` | Go Backend (Port 8080) |
-| `/ws/*` | Go Backend WebSocket (Port 8080) |
-| `/` | Admin Dashboard (static files) |
-| `/simulator` | Driver Simulator (static files) |
+| Route | Đích | Ghi Chú |
+|---|---|---|
+| `/api/*` | Go Backend (Port 8080) | Reverse proxy REST API |
+| `/ws/*` | Go Backend WebSocket (Port 8080) | WebSocket proxy (hỗ trợ connection upgrade) |
+| `/admin` | Admin Dashboard SPA | Phục vụ static files của Admin Dashboard |
+| `/simulator` | Driver Simulator SPA | Phục vụ static files của Driver Simulator |
+| `/` | Redirect 302 sang `/admin` | Tự động chuyển hướng trang chủ sang Admin Dashboard |
 
 ---
 
@@ -772,13 +850,13 @@ sequenceDiagram
     BE->>BE: bcrypt.Hash(password)
     BE->>PG: INSERT INTO drivers (driver_id, email, password_hash, ...)
     PG-->>BE: OK
-    BE-->>SIM: {driver: {...}, token: "JWT..."}
+    BE-->>SIM: {driver: {...}, token: "hex_session_token"}
     SIM->>SIM: Lưu token vào localStorage
 
     Note over SIM,BE: Các request tiếp theo
 
-    SIM->>BE: GET /api/auth/me\nAuthorization: Bearer <token>
-    BE->>BE: Xác minh JWT signature + expiry
+    SIM->>BE: GET /api/auth/me?driver_id=DRV-XXX (hoặc Authorization: Bearer <token>)
+    BE->>BE: Xác minh session token / driver_id
     BE->>PG: SELECT * FROM drivers WHERE driver_id = ?
     PG-->>BE: Driver record
     BE-->>SIM: {driver profile}
@@ -788,7 +866,7 @@ sequenceDiagram
 
 | Biện Pháp | Cách Triển Khai |
 |---|---|
-| **Băm mật khẩu** | bcrypt trong `auth/repository.go` |
+| **Băm mật khẩu** | bcrypt trong `auth/auth.go` |
 | **Quản lý bí mật** | Tất cả thông tin xác thực qua biến môi trường (`.env`) |
 | **Không hardcode** | Được thực thi bởi quy tắc kiến trúc trong `AGENTS.md` |
 | **CORS** | Wildcard `*` trong development; cần giới hạn trong production |

@@ -13,23 +13,26 @@ graph TB
         WS_IN["WebSocket Ingestion<br/>(Gorilla WebSocket)"]
         BBOX["Bounding Box Filter<br/>(Go, in-memory)"]
         OSRM_C["OSRM Client<br/>(HTTP → OSRM Engine)"]
-        H3["H3 Spatial Indexer<br/>(h3-go, Resolution 8)"]
+        H3["H3 Spatial Indexer<br/>(Pure Go, Resolution 8)"]
         AGG["Lock-Free Aggregator<br/>(sync.Map + atomic)"]
         PUB["Redis Publisher<br/>(1s batch flush)"]
         PERSIST["PostgreSQL Writer<br/>(30s batch flush)"]
         WS_OUT["WebSocket Hub<br/>(Admin broadcast)"]
+        AUTH["Auth Handler<br/>(Session auth + bcrypt)"]
     end
 
     subgraph "Infrastructure Layer"
         OSRM["OSRM Engine<br/>(C++ Docker)"]
         REDIS["Redis<br/>(Pub/Sub + Cache)"]
         PG["PostgreSQL<br/>(+ PostGIS)"]
+        AI["AI Agent<br/>(FastAPI ReAct)"]
     end
 
-    SIM -->|"Protobuf/WS<br/>every 3s"| WS_IN
+    SIM -->|"WebSocket /ws/driver<br/>GPSBatch"| WS_IN
+    SIM -->|"REST /api/auth/*"| AUTH
     WS_IN --> BBOX
-    BBOX -->|"70% pass<br/>(safe points)"| H3
-    BBOX -->|"30% suspect"| OSRM_C
+    BBOX -->|"Trong BBox<br/>(loại bỏ, an toàn)"| DISCARD["Loại bỏ GPS"]
+    BBOX -->|"Ngoài BBox"| OSRM_C
     OSRM_C -->|"HTTP GET /match"| OSRM
     OSRM_C -->|"deviation > 50m"| H3
     H3 --> AGG
@@ -39,13 +42,16 @@ graph TB
     REDIS -->|"Pub/Sub"| WS_OUT
     WS_OUT -->|"WS push"| ADM
     PERSIST --> PG
-    ADM -->|"REST /api/history"| PG
+    ADM -->|"REST /api/history"| PERSIST
+    ADM -->|"POST /api/ai/investigate"| AI
+    AI -->|"Query"| PG
 
     style SIM fill:#4fc3f7,stroke:#0277bd,color:#000
     style ADM fill:#81c784,stroke:#2e7d32,color:#000
     style OSRM fill:#ffb74d,stroke:#e65100,color:#000
     style REDIS fill:#ef5350,stroke:#b71c1c,color:#fff
     style PG fill:#7986cb,stroke:#283593,color:#fff
+    style AI fill:#ab47bc,stroke:#4a148c,color:#fff
 ```
 
 ## 2. Component Responsibilities
@@ -54,11 +60,10 @@ graph TB
 
 | Aspect         | Detail                                                |
 | -------------- | ----------------------------------------------------- |
-| **Purpose**    | Generate realistic GPS traces for N virtual drivers   |
-| **Tech**       | React 18, Vite, Web Workers, protobufjs               |
-| **Output**     | Protobuf-encoded `GPSBatch` over WebSocket             |
-| **Frequency**  | Every 3 seconds per driver                            |
-| **Deviation**  | Configurable X% of drivers intentionally deviate      |
+| **Purpose**    | Generate realistic GPS traces for virtual drivers & manual trip planning |
+| **Tech**       | React 18, Vite, MapLibre GL JS, OSRM route snapping   |
+| **Output**     | GPS points batch over WebSocket + Trip registration REST |
+| **Deviation**  | Interactive Draw Mode + OSRM map-matching             |
 
 ### 2.2 Go Backend
 
@@ -66,13 +71,14 @@ The backend is a **single Go binary** organized into internal packages:
 
 | Package        | Responsibility                                        | I/O              |
 | -------------- | ----------------------------------------------------- | ----------------- |
-| `ingestion`    | Accept WebSocket connections, decode Protobuf          | WS ← Simulator   |
+| `ingestion`    | Accept WebSocket connections, decode GPS batches      | WS ← Simulator   |
 | `filter`       | Bounding box pre-check + OSRM map-matching             | HTTP → OSRM      |
-| `spatial`      | Convert (lat, lng) → H3 cell index                     | Pure computation  |
-| `aggregator`   | Lock-free counters per H3 cell                          | In-memory only    |
-| `publisher`    | Batch flush aggregated data to Redis                    | TCP → Redis       |
-| `persistence`  | Batch insert deviation events to PostgreSQL             | TCP → PostgreSQL  |
+| `spatial`      | Convert (lat, lng) → H3 cell index (pure Go)          | Pure computation  |
+| `aggregator`   | Lock-free counters per H3 cell (`sync.Map` + atomic)  | In-memory only    |
+| `publisher`    | Batch flush aggregated data to Redis (1s)             | TCP → Redis       |
+| `persistence`  | Batch insert deviation events to PostgreSQL (30s)     | TCP → PostgreSQL  |
 | `websocket`    | Admin WebSocket hub, subscribes Redis, pushes clients   | WS → Admin        |
+| `auth`         | Driver registration, login and session auth           | REST API + SQL    |
 
 ### 2.3 Admin Dashboard (Frontend)
 

@@ -1,0 +1,2489 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Driver Deviation Heatmap & AI Investigation — Presentation</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap"
+        rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            /* Bright / Light Modern Presentation Theme (Default) */
+            --bg-dark: #f8fafc;
+            --bg-card: rgba(255, 255, 255, 0.9);
+            --bg-card-hover: rgba(255, 255, 255, 0.98);
+            --border-card: rgba(203, 213, 225, 0.8);
+            --border-glow: rgba(2, 132, 199, 0.4);
+            
+            --accent-cyan: #0284c7;       /* Electric Sky Blue */
+            --accent-orange: #ea580c;     /* Crisp Orange */
+            --accent-green: #16a34a;      /* Emerald Green */
+            --accent-purple: #7c3aed;     /* Deep Violet */
+            --accent-gold: #d97706;       /* Amber Gold */
+            --accent-red: #e11d48;        /* Crimson Red */
+            
+            --text-main: #0f172a;         /* Deep Slate 900 */
+            --text-muted: #475569;        /* Slate 600 */
+            --diagram-bg: #ffffff;
+            --diagram-border: #e2e8f0;
+            --svg-text: #0f172a;
+            --svg-box-bg: rgba(248, 250, 252, 0.95);
+            --svg-road: #94a3b8;
+            --svg-road-line: #cbd5e1;
+
+            --font-main: 'Inter', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+        }
+
+        /* Dark Theme Toggle Support */
+        body.theme-dark {
+            --bg-dark: #070a12;
+            --bg-card: rgba(15, 23, 42, 0.75);
+            --bg-card-hover: rgba(22, 36, 66, 0.9);
+            --border-card: rgba(56, 189, 248, 0.2);
+            --border-glow: rgba(56, 189, 248, 0.6);
+            --accent-cyan: #38bdf8;
+            --accent-orange: #f97316;
+            --accent-green: #22c55e;
+            --accent-purple: #c084fc;
+            --accent-gold: #fbbf24;
+            --accent-red: #ef4444;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --diagram-bg: rgba(10, 15, 29, 0.85);
+            --diagram-border: rgba(56, 189, 248, 0.25);
+            --svg-text: #f8fafc;
+            --svg-box-bg: rgba(15, 23, 42, 0.9);
+            --svg-road: #475569;
+            --svg-road-line: #fbbf24;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: var(--font-main);
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+            user-select: none;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+        /* Particle / Hexagon Background Canvas */
+        #bgCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        .ambient-glow {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            background:
+                radial-gradient(circle at 15% 20%, rgba(2, 132, 199, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 85% 80%, rgba(234, 88, 12, 0.06) 0%, transparent 45%),
+                radial-gradient(circle at 50% 50%, rgba(124, 58, 237, 0.05) 0%, transparent 50%);
+            pointer-events: none;
+        }
+
+        body.theme-dark .ambient-glow {
+            background:
+                radial-gradient(circle at 15% 20%, rgba(56, 189, 248, 0.12) 0%, transparent 40%),
+                radial-gradient(circle at 85% 80%, rgba(249, 115, 22, 0.1) 0%, transparent 45%),
+                radial-gradient(circle at 50% 50%, rgba(192, 132, 252, 0.08) 0%, transparent 50%);
+        }
+
+        .slide-container {
+            position: relative;
+            z-index: 10;
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem 3.5rem 4rem 3.5rem;
+        }
+
+        .slide {
+            position: absolute;
+            width: calc(100% - 7rem);
+            max-width: 1440px;
+            height: calc(100% - 5.5rem);
+            max-height: 840px;
+            opacity: 0;
+            visibility: hidden;
+            transform: scale(0.96) translateY(20px);
+            transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .slide.active {
+            opacity: 1;
+            visibility: visible;
+            transform: scale(1) translateY(0);
+        }
+
+        /* Slide Header */
+        .slide-header {
+            margin-bottom: 1.2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            border-bottom: 1px solid var(--border-card);
+            padding-bottom: 0.6rem;
+        }
+
+        .slide-header-left {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .badge-cat {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.75rem;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            color: var(--accent-cyan);
+            background: rgba(2, 132, 199, 0.1);
+            padding: 0.25rem 0.75rem;
+            border-radius: 999px;
+            border: 1px solid rgba(2, 132, 199, 0.3);
+            margin-bottom: 0.4rem;
+            text-transform: uppercase;
+            width: fit-content;
+        }
+
+        .slide-title {
+            font-size: 2rem;
+            font-weight: 800;
+            color: var(--text-main);
+            letter-spacing: -0.02em;
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+        }
+
+        .slide-tagline {
+            font-size: 0.88rem;
+            color: var(--text-muted);
+            font-family: var(--font-mono);
+        }
+
+        /* Layout Grids */
+        .grid-split-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .grid-split-3 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.25rem;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .grid-split-4 {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .grid-text-visual {
+            display: grid;
+            grid-template-columns: 1.15fr 0.85fr;
+            gap: 1.5rem;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .grid-visual-text {
+            display: grid;
+            grid-template-columns: 0.95fr 1.05fr;
+            gap: 1.5rem;
+            flex: 1;
+            min-height: 0;
+        }
+
+        /* Glassmorphism Cards */
+        .card {
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--border-card);
+            border-radius: 16px;
+            padding: 1.4rem;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        body.theme-dark .card {
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+        }
+
+        .card:hover {
+            transform: translateY(-3px);
+            border-color: var(--border-glow);
+            box-shadow: 0 15px 35px rgba(2, 132, 199, 0.15);
+        }
+
+        .card-header {
+            font-size: 1.15rem;
+            font-weight: 700;
+            margin-bottom: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+        }
+
+        .card-header.orange {
+            color: var(--accent-orange);
+        }
+
+        .card-header.cyan {
+            color: var(--accent-cyan);
+        }
+
+        .card-header.purple {
+            color: var(--accent-purple);
+        }
+
+        .card-header.green {
+            color: var(--accent-green);
+        }
+
+        .card-header.gold {
+            color: var(--accent-gold);
+        }
+
+        .card-header.red {
+            color: var(--accent-red);
+        }
+
+        .card-body {
+            font-size: 0.92rem;
+            line-height: 1.55;
+            color: var(--text-muted);
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+        }
+
+        .card-body ul {
+            list-style: none;
+        }
+
+        .card-body li {
+            position: relative;
+            padding-left: 1.3rem;
+            margin-bottom: 0.65rem;
+        }
+
+        .card-body li::before {
+            content: "▹";
+            position: absolute;
+            left: 0;
+            color: var(--accent-cyan);
+            font-weight: bold;
+        }
+
+        .card-body li.warn::before {
+            color: var(--accent-orange);
+        }
+
+        .card-body li.success::before {
+            color: var(--accent-green);
+        }
+
+        .card-body li.purple::before {
+            color: var(--accent-purple);
+        }
+
+        .highlight {
+            color: var(--text-main);
+            font-weight: 600;
+        }
+
+        .badge-pill {
+            display: inline-block;
+            font-size: 0.72rem;
+            font-family: var(--font-mono);
+            font-weight: 700;
+            padding: 0.15rem 0.5rem;
+            border-radius: 4px;
+            background: rgba(2, 132, 199, 0.12);
+            color: var(--accent-cyan);
+            border: 1px solid rgba(2, 132, 199, 0.25);
+            margin-left: 0.3rem;
+        }
+
+        /* SVG Diagram Box */
+        .diagram-container {
+            background: var(--diagram-bg);
+            border: 1px solid var(--diagram-border);
+            border-radius: 14px;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            width: 100%;
+            height: 100%;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+        }
+
+        .diagram-container svg {
+            width: 100%;
+            height: 100%;
+            max-height: 100%;
+        }
+
+        .diagram-caption {
+            font-size: 0.78rem;
+            color: var(--accent-cyan);
+            font-family: var(--font-mono);
+            margin-top: 0.5rem;
+            text-align: center;
+            font-weight: 600;
+        }
+
+        /* Hero / Cover Slide */
+        .hero-slide {
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            position: relative;
+        }
+
+        .hero-title {
+            font-size: 3.4rem;
+            font-weight: 900;
+            letter-spacing: -0.03em;
+            background: linear-gradient(135deg, #0284c7 0%, #6366f1 40%, #ea580c 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.8rem;
+            text-shadow: 0 10px 40px rgba(2, 132, 199, 0.2);
+        }
+
+        body.theme-dark .hero-title {
+            background: linear-gradient(135deg, #38bdf8 0%, #818cf8 40%, #f97316 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 10px 40px rgba(56, 189, 248, 0.3);
+        }
+
+        .hero-subtitle {
+            font-size: 1.25rem;
+            color: var(--text-muted);
+            max-width: 900px;
+            margin-bottom: 2rem;
+            line-height: 1.6;
+        }
+
+        .pill-container {
+            display: flex;
+            gap: 0.8rem;
+            flex-wrap: wrap;
+            justify-content: center;
+            margin-bottom: 2.2rem;
+        }
+
+        .pill {
+            background: var(--bg-card);
+            border: 1px solid var(--border-card);
+            padding: 0.55rem 1.1rem;
+            border-radius: 999px;
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+        }
+
+        .pill:hover {
+            border-color: var(--accent-cyan);
+            background: rgba(2, 132, 199, 0.1);
+            transform: translateY(-2px);
+        }
+
+        /* Tier Stack View */
+        .tier-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+            flex: 1;
+        }
+
+        .tier-item {
+            background: var(--bg-card);
+            border: 1px solid var(--border-card);
+            border-radius: 12px;
+            padding: 0.9rem 1.3rem;
+            display: flex;
+            align-items: center;
+            gap: 1.2rem;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.03);
+        }
+
+        .tier-item:hover {
+            transform: translateX(6px);
+            border-color: var(--accent-cyan);
+            background: var(--bg-card-hover);
+        }
+
+        .tier-num {
+            font-family: var(--font-mono);
+            font-size: 1.05rem;
+            font-weight: 800;
+            padding: 0.35rem 0.75rem;
+            border-radius: 8px;
+            min-width: 85px;
+            text-align: center;
+        }
+
+        .t1 {
+            background: rgba(2, 132, 199, 0.12);
+            color: var(--accent-cyan);
+            border: 1px solid rgba(2, 132, 199, 0.25);
+        }
+
+        .t2 {
+            background: rgba(234, 88, 12, 0.12);
+            color: var(--accent-orange);
+            border: 1px solid rgba(234, 88, 12, 0.25);
+        }
+
+        .t3 {
+            background: rgba(22, 163, 74, 0.12);
+            color: var(--accent-green);
+            border: 1px solid rgba(22, 163, 74, 0.25);
+        }
+
+        .t4 {
+            background: rgba(124, 58, 237, 0.12);
+            color: var(--accent-purple);
+            border: 1px solid rgba(124, 58, 237, 0.25);
+        }
+
+        .tier-content h4 {
+            font-size: 1.02rem;
+            font-weight: 700;
+            margin-bottom: 0.2rem;
+            color: var(--text-main);
+        }
+
+        .tier-content p {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        /* Custom Table */
+        .table-custom {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.88rem;
+            margin-top: 0.3rem;
+        }
+
+        .table-custom th {
+            text-align: left;
+            padding: 0.6rem 0.9rem;
+            background: rgba(241, 245, 249, 0.9);
+            color: var(--accent-cyan);
+            border-bottom: 1px solid var(--border-card);
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            text-transform: uppercase;
+        }
+
+        body.theme-dark .table-custom th {
+            background: rgba(30, 41, 59, 0.95);
+        }
+
+        .table-custom td {
+            padding: 0.55rem 0.9rem;
+            border-bottom: 1px solid rgba(203, 213, 225, 0.6);
+            color: var(--text-muted);
+        }
+
+        body.theme-dark .table-custom td {
+            border-bottom: 1px solid rgba(51, 65, 85, 0.5);
+        }
+
+        .table-custom tr:hover td {
+            background: rgba(2, 132, 199, 0.06);
+            color: var(--text-main);
+        }
+
+        /* Interactive Navigation Bar */
+        .nav-bar {
+            position: absolute;
+            bottom: 1.2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+            gap: 1.2rem;
+            background: rgba(255, 255, 255, 0.92);
+            backdrop-filter: blur(16px);
+            padding: 0.4rem 1.2rem;
+            border-radius: 999px;
+            border: 1px solid var(--border-card);
+            z-index: 100;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+        }
+
+        body.theme-dark .nav-bar {
+            background: rgba(15, 23, 42, 0.9);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+        }
+
+        .nav-btn {
+            background: none;
+            border: none;
+            color: var(--text-main);
+            font-size: 1rem;
+            cursor: pointer;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: all 0.2s ease;
+        }
+
+        .nav-btn:hover {
+            background: var(--accent-cyan);
+            color: #ffffff;
+        }
+
+        .nav-pill-btn {
+            background: rgba(2, 132, 199, 0.08);
+            border: 1px solid rgba(2, 132, 199, 0.25);
+            color: var(--accent-cyan);
+            font-size: 0.78rem;
+            font-family: var(--font-mono);
+            font-weight: 600;
+            padding: 0.3rem 0.75rem;
+            border-radius: 999px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+
+        .nav-pill-btn:hover {
+            background: var(--accent-cyan);
+            color: #ffffff;
+        }
+
+        .slide-counter {
+            font-family: var(--font-mono);
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: var(--accent-cyan);
+            min-width: 65px;
+            text-align: center;
+        }
+
+        .timer-display {
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            color: var(--accent-gold);
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+        }
+
+        .progress-bar {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-orange), var(--accent-green));
+            transition: width 0.3s ease;
+            z-index: 101;
+        }
+
+        /* Slide Overview Modal */
+        .modal-overview {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(248, 250, 252, 0.96);
+            backdrop-filter: blur(25px);
+            z-index: 1000;
+            display: none;
+            flex-direction: column;
+            padding: 2.5rem 4rem;
+            overflow-y: auto;
+        }
+
+        body.theme-dark .modal-overview {
+            background: rgba(5, 8, 16, 0.95);
+        }
+
+        .modal-overview.active {
+            display: flex;
+        }
+
+        .overview-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+
+        .overview-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.5rem;
+        }
+
+        .overview-thumb {
+            background: var(--bg-card);
+            border: 1px solid var(--border-card);
+            border-radius: 12px;
+            padding: 1.2rem;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.04);
+        }
+
+        .overview-thumb:hover {
+            border-color: var(--accent-cyan);
+            transform: translateY(-4px);
+            box-shadow: 0 10px 25px rgba(2, 132, 199, 0.18);
+        }
+
+        .overview-thumb.current {
+            border-color: var(--accent-orange);
+            background: rgba(234, 88, 12, 0.1);
+        }
+
+        .overview-num {
+            font-family: var(--font-mono);
+            font-size: 0.78rem;
+            color: var(--accent-cyan);
+            font-weight: 700;
+        }
+
+        .overview-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        /* Laser Pointer / Spotlight Simulation */
+        .laser-pointer {
+            position: fixed;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #ef4444;
+            box-shadow: 0 0 12px 6px rgba(239, 68, 68, 0.8), 0 0 24px 12px rgba(239, 68, 68, 0.4);
+            pointer-events: none;
+            z-index: 9999;
+            transform: translate(-50%, -50%);
+            display: none;
+        }
+
+        /* SVG styles & helper badges */
+        .stat-badge {
+            background: var(--bg-card);
+            border: 1px solid var(--border-card);
+            border-radius: 8px;
+            padding: 0.5rem 0.8rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        }
+
+        .stat-badge .num {
+            font-family: var(--font-mono);
+            font-size: 1.3rem;
+            font-weight: 800;
+            color: var(--accent-cyan);
+        }
+
+        .stat-badge .lbl {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="bgCanvas"></canvas>
+    <div class="ambient-glow"></div>
+    <div class="laser-pointer" id="laserPointer"></div>
+    <div class="progress-bar" id="progressBar"></div>
+
+    <div class="slide-container">
+
+        <!-- ==================== SLIDE 1: Title & Hero ==================== -->
+        <div class="slide active" id="slide-1">
+            <div class="hero-slide">
+                <span class="badge-cat">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.5">
+                        <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+                    </svg>
+                    HỆ THỐNG GIÁM SÁT THỜI GIAN THỰC & AI AGENT ĐIỀU TRA
+                </span>
+                <h1 class="hero-title">Real-Time Driver Deviation Heatmap</h1>
+                <p class="hero-subtitle">
+                    Phát hiện lệch tuyến thời gian thực (<span
+                        style="color:var(--accent-cyan); font-weight:700;">&lt;1s</span>) & Tự động chẩn đoán nguyên
+                    nhân gốc rễ bằng <span style="color:var(--accent-purple); font-weight:700;">AI ReAct Agent</span>
+                    trên kiến trúc Polyglot tối ưu hóa cực hạn
+                </p>
+
+                <!-- Hero Interactive Visual SVG -->
+                <div style="width: 100%; max-width: 820px; height: 210px; margin-bottom: 1.5rem; position: relative;">
+                    <svg viewBox="0 0 800 200" style="width:100%; height:100%;">
+                        <defs>
+                            <linearGradient id="gradCyan" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="#0284c7" stop-opacity="0.8" />
+                                <stop offset="100%" stop-color="#6366f1" stop-opacity="0.8" />
+                            </linearGradient>
+                            <linearGradient id="gradOrange" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="#ea580c" />
+                                <stop offset="100%" stop-color="#e11d48" />
+                            </linearGradient>
+                            <filter id="glowEffect" x="-20%" y="-20%" width="140%" height="140%">
+                                <feGaussianBlur stdDeviation="3" result="blur" />
+                                <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                            </filter>
+                        </defs>
+                        <!-- Grid lines -->
+                        <path d="M50 160 L750 160 M100 130 L700 130 M150 100 L650 100" stroke="rgba(203,213,225,0.7)"
+                            stroke-width="1" stroke-dasharray="4 4" />
+
+                        <!-- Route Polyline Standard -->
+                        <path d="M80 140 C 200 130, 260 80, 400 80 C 540 80, 600 140, 720 140" fill="none"
+                            stroke="url(#gradCyan)" stroke-width="4" stroke-linecap="round" />
+
+                        <!-- Deviation Detour Line -->
+                        <path d="M260 80 C 310 20, 480 15, 540 80" fill="none" stroke="url(#gradOrange)"
+                            stroke-width="3.5" stroke-dasharray="6 4" filter="url(#glowEffect)" />
+
+                        <!-- Start & End Nodes -->
+                        <circle cx="80" cy="140" r="7" fill="#16a34a" filter="url(#glowEffect)" />
+                        <text x="80" y="170" fill="#16a34a" font-size="12" font-family="'JetBrains Mono', monospace"
+                            font-weight="700" text-anchor="middle">XUẤT PHÁT</text>
+
+                        <circle cx="720" cy="140" r="7" fill="#0284c7" filter="url(#glowEffect)" />
+                        <text x="720" y="170" fill="#0284c7" font-size="12" font-family="'JetBrains Mono', monospace"
+                            font-weight="700" text-anchor="middle">ĐÍCH ĐẾN</text>
+
+                        <!-- H3 Hexagon Hotspot Badge -->
+                        <polygon points="400,20 435,38 435,76 400,94 365,76 365,38" fill="rgba(234,88,12,0.15)"
+                            stroke="#ea580c" stroke-width="2" filter="url(#glowEffect)" />
+                        <circle cx="400" cy="57" r="5" fill="#e11d48" />
+                        <text x="400" y="52" fill="#0f172a" font-size="11" font-family="'JetBrains Mono', monospace"
+                            font-weight="800" text-anchor="middle">H3 HEX #88308</text>
+                        <text x="400" y="66" fill="#ea580c" font-size="10" font-family="'JetBrains Mono', monospace"
+                            font-weight="700" text-anchor="middle">LỆCH &gt; 120m</text>
+
+                        <!-- AI Investigation Pulse -->
+                        <circle cx="400" cy="57" r="28" fill="none" stroke="#7c3aed" stroke-width="1.5"
+                            stroke-dasharray="3 3" opacity="0.8">
+                            <animate attributeName="r" values="15;38;15" dur="2.5s" repeatCount="indefinite" />
+                            <animate attributeName="opacity" values="0.9;0.1;0.9" dur="2.5s" repeatCount="indefinite" />
+                        </circle>
+                    </svg>
+                </div>
+
+                <div class="pill-container">
+                    <div class="pill"><span style="color:var(--accent-cyan);">⚡</span> Go 1.22+ Lock-Free</div>
+                    <div class="pill"><span style="color:var(--accent-orange);">🗺️</span> OSRM C++ (Docker)</div>
+                    <div class="pill"><span style="color:var(--accent-green);">🔷</span> Uber H3 Spatial Index</div>
+                    <div class="pill"><span style="color:var(--accent-gold);">📊</span> Deck.gl 3D WebGL</div>
+                    <div class="pill"><span style="color:var(--accent-purple);">🧠</span> AI ReAct 7-Tools</div>
+                </div>
+                <div
+                    style="font-size: 0.95rem; color: var(--accent-green); font-weight: 600; display:flex; align-items:center; gap:0.5rem;">
+                    <span>🛡️</span> Thiết kế tối ưu hóa cực hạn trên VPS 4GB RAM — Tiết kiệm 99% I/O Database
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== SLIDE 2: Problem Statement ==================== -->
+        <div class="slide" id="slide-2">
+            <div class="slide-header">
+                <div class="slide-header-left">
+                    <span class="badge-cat">01. BÀI TOÁN THỰC TẾ</span>
+                    <h2 class="slide-title">Nỗi đau trong Vận hành Ride-Hailing (Grab, Xanh SM, Be)</h2>
+                </div>
+                <span class="slide-tagline">Deviations • Data Deluge • Root-Cause Blindspots</span>
+            </div>
+            <div class="grid-split-3">
+                <div class="card">
+                    <div class="card-header orange">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path
+                                d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                            <line x1="12" y1="9" x2="12" y2="13" />
+                            <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                        Nỗi đau Vận hành & Tài chính
+                    </div>
+                    <div class="card-body">
+                        <!-- SVG Illustration Detour -->
+                        <div style="height: 100px; width: 100%; margin-bottom: 0.8rem;">
+                            <svg viewBox="0 0 300 100" style="width:100%; height:100%;">
+                                <rect width="300" height="100" rx="8" fill="var(--svg-box-bg)"
+                                    stroke="rgba(234,88,12,0.25)" />
+                                <line x1="30" y1="70" x2="270" y2="70" stroke="#0284c7" stroke-width="3" />
+                                <path d="M 80 70 Q 150 15 220 70" fill="none" stroke="#ea580c" stroke-width="3"
+                                    stroke-dasharray="4 3" />
+                                <circle cx="30" cy="70" r="4" fill="#16a34a" />
+                                <circle cx="270" cy="70" r="4" fill="#0284c7" />
+                                <circle cx="150" cy="42" r="5" fill="#e11d48" />
+                                <text x="150" y="32" fill="#ea580c" font-size="10" font-family="'JetBrains Mono'"
+                                    font-weight="700" text-anchor="middle">ĐI VÒNG +2.4km</text>
+                                <text x="150" y="86" fill="var(--text-muted)" font-size="10" text-anchor="middle">Lộ trình gốc quy
+                                    định</text>
+                            </svg>
+                        </div>
+                        <ul>
+                            <li><span class="highlight">Lệch tuyến (Route Deviation):</span> Tài xế đi vòng, lạc đường
+                                làm phát sinh cước phí phi lý.</li>
+                            <li><span class="highlight">Khiếu nại khách hàng:</span> Gây lo lắng về an toàn, tăng áp lực
+                                bộ phận CSKH.</li>
+                            <li><span class="highlight">Thất thoát chi phí:</span> Lãng phí nhiên liệu, giảm năng suất
+                                đội xe.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header cyan">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <circle cx="12" cy="12" r="10" />
+                            <polyline points="12 6 12 12 16 14" />
+                        </svg>
+                        Nghẽn cổ chai Real-Time
+                    </div>
+                    <div class="card-body">
+                        <!-- SVG Illustration Throughput Bottleneck -->
+                        <div style="height: 100px; width: 100%; margin-bottom: 0.8rem;">
+                            <svg viewBox="0 0 300 100" style="width:100%; height:100%;">
+                                <rect width="300" height="100" rx="8" fill="var(--svg-box-bg)"
+                                    stroke="rgba(2,132,199,0.25)" />
+                                <text x="40" y="25" fill="#0284c7" font-size="10" font-family="'JetBrains Mono'">GPS
+                                    Streams</text>
+                                <path d="M 20 40 L 90 50 M 20 55 L 90 55 M 20 70 L 90 60" stroke="#0284c7"
+                                    stroke-width="2" />
+                                <rect x="90" y="40" width="70" height="30" rx="4" fill="#ffffff" stroke="#ea580c"
+                                    stroke-width="1.5" />
+                                <text x="125" y="58" fill="#ea580c" font-size="9" font-weight="700"
+                                    text-anchor="middle">CPU BOTTLENECK</text>
+                                <path d="M 160 55 L 240 55" stroke="#e11d48" stroke-width="2" stroke-dasharray="3 3" />
+                                <rect x="240" y="38" width="50" height="34" rx="4" fill="#ffffff" stroke="#e11d48" />
+                                <text x="265" y="58" fill="#e11d48" font-size="8" font-weight="700" text-anchor="middle">DB I/O
+                                    CRASH</text>
+                            </svg>
+                        </div>
+                        <ul>
+                            <li><span class="highlight">Dữ liệu khổng lồ:</span> Hàng ngàn xe phát GPS mỗi 3 giây
+                                (Volume cực lớn).</li>
+                            <li><span class="highlight">Quá tải Map-matching:</span> Đẩy 100% GPS vào thuật toán C++ gây
+                                sập CPU.</li>
+                            <li><span class="highlight">Nghẽn đĩa PostgreSQL:</span> Ghi từng điểm GPS làm cày nát ổ đĩa
+                                máy chủ.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header purple">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <circle cx="11" cy="11" r="8" />
+                            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+                        </svg>
+                        Điểm mù "TẠI SAO LỆCH?"
+                    </div>
+                    <div class="card-body">
+                        <!-- SVG Illustration Question Mark Root Cause -->
+                        <div style="height: 100px; width: 100%; margin-bottom: 0.8rem;">
+                            <svg viewBox="0 0 300 100" style="width:100%; height:100%;">
+                                <rect width="300" height="100" rx="8" fill="var(--svg-box-bg)"
+                                    stroke="rgba(124,58,237,0.25)" />
+                                <circle cx="80" cy="50" r="22" fill="rgba(234,88,12,0.15)" stroke="#ea580c" />
+                                <text x="80" y="55" fill="#ea580c" font-size="14" font-weight="900"
+                                    text-anchor="middle">LỆCH</text>
+                                <path d="M 110 50 L 160 50" stroke="#7c3aed" stroke-width="2"
+                                    marker-end="url(#arrow)" />
+                                <rect x="165" y="20" width="120" height="60" rx="6" fill="#ffffff"
+                                    stroke="#7c3aed" />
+                                <text x="225" y="38" fill="var(--text-main)" font-size="9" text-anchor="middle">🌧️ Ngập lụt?</text>
+                                <text x="225" y="52" fill="var(--text-main)" font-size="9" text-anchor="middle">🚧 Sửa đường?</text>
+                                <text x="225" y="66" fill="#e11d48" font-size="9" font-weight="700"
+                                    text-anchor="middle">🚨 Hay Gian lận cước?</text>
+                            </svg>
+                        </div>
+                        <ul>
+                            <li><span class="highlight">Dashboard truyền thống:</span> Chỉ dừng lại ở việc báo "XE ĐANG
+                                LỆCH".</li>
+                            <li><span class="highlight">Mù tịt nguyên nhân:</span> Không phân biệt được né ngập hợp lệ
+                                vs gian lận.</li>
+                            <li><span class="highlight">AI Điều tra tự động:</span> Cần AI truy vấn chứng cứ đa chiều
+                                ngay tức khắc.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== SLIDE 3: Architecture Dilemma ==================== -->
+        <div class="slide" id="slide-3">
+            <div class="slide-header">
+                <div class="slide-header-left">
+                    <span class="badge-cat">02. TƯ DUY KIẾN TRÚC</span>
+                    <h2 class="slide-title">Tại sao không dùng 1 ngôn ngữ? — Polyglot Strategy</h2>
+                </div>
+                <span class="slide-tagline">Go Network Engine + OSRM C++ Container Isolation</span>
+            </div>
+            <div class="grid-text-visual">
+                <div style="display:flex; flex-direction:column; gap:1rem;">
+                    <div class="grid-split-2">
+                        <div class="card" style="border-color: rgba(234,88,12,0.3);">
+                            <div class="card-header orange">
+                                <span style="font-size:1.1rem;">❌</span> Nếu CHỈ dùng C++
+                            </div>
+                            <div class="card-body">
+                                <ul>
+                                    <li><span class="highlight">Ưu điểm:</span> Map-matching siêu tốc, tối ưu bộ nhớ.
+                                    </li>
+                                    <li><span class="highlight">Nhược điểm:</span> Viết WebSocket, auth, connection pool
+                                        bằng C++ cực kỳ phức tạp và chậm tiến độ.</li>
+                                    <li><span class="highlight" style="color:var(--accent-orange);">RỦI RO:</span> 1 lỗi
+                                        Memory Leak nhỏ có thể làm sập toàn bộ hệ thống!</li>
+                                </ul>
+                            </div>
+                        </div>
+                        <div class="card" style="border-color: rgba(2,132,199,0.3);">
+                            <div class="card-header cyan">
+                                <span style="font-size:1.1rem;">❌</span> Nếu CHỈ dùng Golang
+                            </div>
+                            <div class="card-body">
+                                <ul>
+                                    <li><span class="highlight">Ưu điểm:</span> Goroutines xuất sắc, I/O mạng tuyệt vời.
+                                    </li>
+                                    <li><span class="highlight">Nhược điểm:</span> Go không có sẵn thư viện Map-matching
+                                        (HMM) chuẩn công nghiệp như C++.</li>
+                                    <li><span class="highlight" style="color:var(--accent-cyan);">RỦI RO:</span> Tự viết
+                                        lại Map-matching tốn hàng tháng và dễ sai sót.</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card"
+                        style="padding: 1.1rem 1.4rem; border-color: var(--accent-green); background: rgba(22, 163, 74, 0.08);">
+                        <div
+                            style="font-weight: 700; color: var(--accent-green); font-size: 0.98rem; display:flex; align-items:center; gap:0.6rem;">
+                            <span>💡</span> GIẢI PHÁP TỐI ƯU: Go Ingestion & Concurrency + OSRM C++ trong Docker độc lập
+                        </div>
+                        <p style="font-size:0.88rem; color:var(--text-muted); margin-top:0.4rem;">
+                            ➔ <strong>Cô lập lỗi (Fault Isolation):</strong> Nếu OSRM gặp trục trặc, Go vẫn nhận GPS
+                            bình thường, circuit breaker kích hoạt sau 500ms mà không sập kết nối khách hàng!
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Visual Architecture Comparison SVG -->
+                <div class="diagram-container">
+                    <svg viewBox="0 0 380 340">
+                        <!-- Top box: Go Ingestion -->
+                        <rect x="30" y="20" width="320" height="90" rx="10" fill="var(--svg-box-bg)"
+                            stroke="#0284c7" stroke-width="2" />
+                        <text x="50" y="45" fill="#0284c7" font-size="12" font-family="'JetBrains Mono'"
+                            font-weight="800">GOLANG NETWORK CORE</text>
+                        <text x="50" y="65" fill="var(--text-main)" font-size="11">⚡ 1,000s WebSocket Conns (RAM &lt; 40MB)</text>
+                        <text x="50" y="82" fill="var(--text-muted)" font-size="10">🛡️ Bounding Box Pre-filter O(1) in RAM</text>
+                        <text x="50" y="98" fill="#16a34a" font-size="10" font-weight="600">➔ Lọc bỏ 70% điểm an toàn
+                            ngay lập tức</text>
+
+                        <!-- Connecting Bridge -->
+                        <path d="M190 110 L190 170" stroke="#ea580c" stroke-width="3" stroke-dasharray="5 3" />
+                        <rect x="130" y="130" width="120" height="24" rx="4" fill="#ffffff" stroke="#ea580c" />
+                        <text x="190" y="146" fill="#ea580c" font-size="9" font-family="'JetBrains Mono'"
+                            font-weight="700" text-anchor="middle">REST (30% nghi vấn)</text>
+
+                        <!-- Bottom box: OSRM Docker -->
+                        <rect x="30" y="170" width="320" height="90" rx="10" fill="var(--svg-box-bg)"
+                            stroke="#ea580c" stroke-width="2" />
+                        <text x="50" y="195" fill="#ea580c" font-size="12" font-family="'JetBrains Mono'"
+                            font-weight="800">OSRM C++ DOCKER (ISOLATED)</text>
+                        <text x="50" y="215" fill="var(--text-main)" font-size="11">🗺️ Hidden Markov Model (HMM) Map
+                            Matching</text>
+                        <text x="50" y="232" fill="var(--text-muted)" font-size="10">📐 Haversine Distance Calc (&gt; 50m
+                            Alert)</text>
+                        <text x="50" y="248" fill="#d97706" font-size="10" font-weight="600">⏱️ Strict 500ms Timeout
+                            Circuit Breaker</text>
+
+                        <!-- Bottom badge: Zero crash -->
+                        <rect x="30" y="280" width="320" height="42" rx="8" fill="rgba(22,163,74,0.12)"
+                            stroke="#16a34a" />
+                        <text x="190" y="306" fill="#16a34a" font-size="11" font-weight="700" text-anchor="middle">🛡️
+                            TÁCH BIỆT TIẾN TRÌNH — ZERO CRASH LAN TRUYỀN</text>
+                    </svg>
+                    <div class="diagram-caption">Mô hình Polyglot: Phân định ranh giới tính toán & mạng rõ ràng</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== SLIDE 4: 4-Tier Architecture ==================== -->
+        <div class="slide" id="slide-4">
+            <div class="slide-header">
+                <div class="slide-header-left">
+                    <span class="badge-cat">03. KIẾN TRÚC TỔNG THỂ</span>
+                    <h2 class="slide-title">Mô hình Kiến trúc 4 Tầng toàn diện (End-to-End)</h2>
+                </div>
+                <span class="slide-tagline">Ingestion ➔ Map Matching ➔ Spatial Aggregation ➔ Storage & AI</span>
+            </div>
+            <div class="grid-text-visual">
+                <div class="tier-list">
+                    <div class="tier-item">
+                        <div class="tier-num t1">TẦNG 1</div>
+                        <div class="tier-content">
+                            <h4 style="color: var(--accent-cyan);">Hứng dữ liệu & Tiền lọc (Go Ingestion Engine)</h4>
+                            <p>WebSocket Protobuf (3s) ➔ Bounding Box Filter O(1) trên RAM ➔ Lọc bỏ 70% an toàn, chỉ đẩy
+                                30% nghi vấn sang Tầng 2.</p>
+                        </div>
+                    </div>
+                    <div class="tier-item">
+                        <div class="tier-num t2">TẦNG 2</div>
+                        <div class="tier-content">
+                            <h4 style="color: var(--accent-orange);">Nắn đường & Xóa nhiễu GPS (OSRM C++ Docker)</h4>
+                            <p>Hidden Markov Model (HMM) khớp GPS vào OpenStreetMap ➔ Tính độ lệch Haversine ➔ Xác nhận
+                                vi phạm nếu lệch &gt; 50 mét.</p>
+                        </div>
+                    </div>
+                    <div class="tier-item">
+                        <div class="tier-num t3">TẦNG 3</div>
+                        <div class="tier-content">
+                            <h4 style="color: var(--accent-green);">Đánh chỉ mục H3 & Phát Real-Time (Uber H3 + Go
+                                Lock-Free + Redis)</h4>
+                            <p>Uber H3 Res 8 (~460m) ➔ Lock-Free sync.Map + Atomic ➔ Snapshot 1s đẩy Redis Pub/Sub ➔
+                                Admin WebSocket (Zero DB I/O).</p>
+                        </div>
+                    </div>
+                    <div class="tier-item">
+                        <div class="tier-num t4">TẦNG 4</div>
+                        <div class="tier-content">
+                            <h4 style="color: var(--accent-purple);">Lưu trữ lịch sử & Render 3D WebGL (PostGIS +
+                                Deck.gl + AI Agent)</h4>
+                            <p>Batch insert 30s vào PostGIS ➔ Deck.gl H3HexagonLayer WebGL 60 FPS ➔ AI ReAct Agent 7
+                                Tools tự động điều tra.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Interactive 4-Tier Pipeline Diagram SVG -->
+                <div class="diagram-container">
+                    <svg viewBox="0 0 400 440">
+                        <!-- Tier 1 -->
+                        <g>
+                            <rect x="40" y="20" width="320" height="65" rx="8" fill="var(--svg-box-bg)"
+                                stroke="#0284c7" stroke-width="1.5" />
+                            <text x="60" y="44" fill="#0284c7" font-size="12" font-family="'JetBrains Mono'"
+                                font-weight="700">TIER 1: INGESTION (Go)</text>
+                            <text x="60" y="62" fill="var(--text-muted)" font-size="10">WebSocket + Protobuf ➔ Bounding Box
+                                O(1)</text>
+                            <circle cx="330" cy="52" r="10" fill="#0284c7" />
+                            <text x="330" y="56" fill="#ffffff" font-size="10" font-weight="800"
+                                text-anchor="middle">1</text>
+                        </g>
+
+                        <!-- Connector 1->2 -->
+                        <path d="M200 85 L200 115" stroke="#0284c7" stroke-width="2" stroke-dasharray="4 2" />
+                        <polygon points="196,115 204,115 200,122" fill="#0284c7" />
+
+                        <!-- Tier 2 -->
+                        <g>
+                            <rect x="40" y="125" width="320" height="65" rx="8" fill="var(--svg-box-bg)"
+                                stroke="#ea580c" stroke-width="1.5" />
+                            <text x="60" y="149" fill="#ea580c" font-size="12" font-family="'JetBrains Mono'"
+                                font-weight="700">TIER 2: MAP MATCH (OSRM)</text>
+                            <text x="60" y="167" fill="var(--text-muted)" font-size="10">HMM Algorithm ➔ Haversine Metric
+                                (&gt;50m)</text>
+                            <circle cx="330" cy="157" r="10" fill="#ea580c" />
+                            <text x="330" y="161" fill="#ffffff" font-size="10" font-weight="800"
+                                text-anchor="middle">2</text>
+                        </g>
+
+                        <!-- Connector 2->3 -->
+                        <path d="M200 190 L200 220" stroke="#ea580c" stroke-width="2" stroke-dasharray="4 2" />
+                        <polygon points="196,220 204,220 200,227" fill="#ea580c" />
+
+                        <!-- Tier 3 -->
+                        <g>
+                            <rect x="40" y="230" width="320" height="65" rx="8" fill="var(--svg-box-bg)"
+                                stroke="#16a34a" stroke-width="1.5" />
+                            <text x="60" y="254" fill="#16a34a" font-size="12" font-family="'JetBrains Mono'"
+                                font-weight="700">TIER 3: H3 AGGREGATOR (Go+Redis)</text>
+                            <text x="60" y="272" fill="var(--text-muted)" font-size="10">Uber H3 Res 8 ➔ sync.Map ➔ Redis 1s</text>
+                            <circle cx="330" cy="262" r="10" fill="#16a34a" />
+                            <text x="330" y="266" fill="#ffffff" font-size="10" font-weight="800"
+                                text-anchor="middle">3</text>
+                        </g>
+
+                        <!-- Connector 3->4 -->
+                        <path d="M200 295 L200 325" stroke="#16a34a" stroke-width="2" stroke-dasharray="4 2" />
+                        <polygon points="196,325 204,325 200,332" fill="#16a34a" />
+
+                        <!-- Tier 4 -->
+                        <g>
+                            <rect x="40" y="335" width="320" height="65" rx="8" fill="var(--svg-box-bg)"
+                                stroke="#7c3aed" stroke-width="1.5" />
+                            <text x="60" y="359" fill="#7c3aed" font-size="12" font-family="'JetBrains Mono'"
+                                font-weight="700">TIER 4: POSTGIS & AI AGENT</text>
+                            <text x="60" y="377" fill="var(--text-muted)" font-size="10">Batch 30s ➔ Deck.gl 3D WebGL ➔ AI
+                                ReAct</text>
+                            <circle cx="330" cy="367" r="10" fill="#7c3aed" />
+                            <text x="330" y="371" fill="#ffffff" font-size="10" font-weight="800"
+                                text-anchor="middle">4</text>
+                        </g>
+                    </svg>
+                    <div class="diagram-caption">Dòng chảy dữ liệu 4 Tầng: Từ GPS thô đến Dashboard & AI Agent</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== SLIDE 5: Tier 1 Details ==================== -->
+        <div class="slide" id="slide-5">
+            <div class="slide-header">
+                <div class="slide-header-left">
+                    <span class="badge-cat">04. TẦNG 1: INGESTION</span>
+                    <h2 class="slide-title">Hứng dữ liệu & Bộ tiền lọc Bounding Box O(1)</h2>
+                </div>
+                <span class="slide-tagline">Protobuf Binary • Goroutines Concurrency • Spatial Pre-filtering</span>
+            </div>
+            <div class="grid-text-visual">
+                <div style="display:flex; flex-direction:column; gap:1.2rem;">
+                    <div class="card">
+                        <div class="card-header cyan">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                            </svg>
+                            Protobuf & Quản lý Kết nối Concurrency
+                        </div>
+                        <div class="card-body">
+                            <ul>
+                                <li><span class="highlight">Protobuf Binary Encoding:</span> Giảm ~80% dung lượng so với
+                                    JSON truyền thống (&lt; 1KB / batch).</li>
+                                <li><span class="highlight">Goroutines siêu nhẹ:</span> Quản lý hàng ngàn kết nối song
+                                    song với bộ nhớ RAM &lt; 40MB.</li>
+                                <li><span class="highlight">Ranh giới độc lập:</span> Package Ingestion không import
+                                    Redis hay PostgreSQL.</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header green">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <rect x="3" y="3" width="18" height="18" rx="2" />
+                                <path d="M9 12l2 2 4-4" />
+                            </svg>
+                            Cơ chế Lọc Bounding Box O(1) trên RAM
+                        </div>
+                        <div class="card-body">
+                            <ul>
+                                <li><span class="highlight">Tạo khung bao:</span> Tính toán min/max Lat-Lng + 50m buffer
+                                    khi xe bắt đầu chuyến.</li>
+                                <li><span class="highlight">Kiểm tra tức thời (~0.001ms):</span> Chỉ dùng 4 phép so
+                                    sánh số học trên CPU.</li>
+                                <li><span class="highlight" style="color:var(--accent-green);">Tiết kiệm 70% CPU:</span>
+                                    70% điểm trong vùng an toàn bị bỏ qua, không gọi OSRM!</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Visual Bounding Box Diagram SVG -->
+                <div class="diagram-container">
+                    <svg viewBox="0 0 380 340">
+                        <!-- Outer Bounding Box (Safe Zone) -->
+                        <rect x="40" y="40" width="300" height="240" rx="12" fill="rgba(22,163,74,0.06)"
+                            stroke="#16a34a" stroke-width="2" stroke-dasharray="6 4" />
+                        <text x="55" y="65" fill="#16a34a" font-size="11" font-family="'JetBrains Mono'"
+                            font-weight="700">BOUNDING BOX (Min/Max + 50m Buffer)</text>
+
+                        <!-- Intended Route Polyline -->
+                        <path d="M70 230 C 120 180, 180 200, 240 120 C 270 80, 290 80, 310 90" fill="none"
+                            stroke="#0284c7" stroke-width="4" />
+
+                        <!-- Safe Point 1 (Inside Box) -->
+                        <circle cx="160" cy="185" r="7" fill="#16a34a" />
+                        <text x="160" y="168" fill="#16a34a" font-size="10" font-weight="700" text-anchor="middle">Điểm
+                            an toàn</text>
+                        <text x="160" y="210" fill="var(--text-muted)" font-size="9" text-anchor="middle">Bỏ qua OSRM
+                            (0.001ms)</text>
+
+                        <!-- Deviated Point (Outside Box) -->
+                        <circle cx="320" cy="305" r="8" fill="#e11d48" filter="url(#glowEffect)" />
+                        <text x="320" y="325" fill="#e11d48" font-size="10" font-weight="800"
+                            text-anchor="middle">LỆCH VÙNG BAO!</text>
+                        <path d="M 280 260 L 315 295" stroke="#ea580c" stroke-width="2" stroke-dasharray="3 3" />
+                        <text x="240" y="280" fill="#ea580c" font-size="9" font-weight="700">Gửi sang Tier 2
+                            (OSRM)</text>
+
+                        <!-- Stats Box bottom -->
+                        <rect x="50" y="10" width="280" height="22" rx="4" fill="var(--svg-box-bg)"
+                            stroke="rgba(2,132,199,0.3)" />
+                        <text x="190" y="25" fill="#0284c7" font-size="10" font-family="'JetBrains Mono'"
+                            font-weight="700" text-anchor="middle">70% BỎ QUA | 30% ĐẨY SANG OSRM</text>
+                    </svg>
+                    <div class="diagram-caption">Thuật toán Bounding Box: Giảm tải 70% áp lực cho cụm C++ Map-matching
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== SLIDE 6: Tier 2 Details ==================== -->
+        <div class="slide" id="slide-6">
+            <div class="slide-header">
+                <div class="slide-header-left">
+                    <span class="badge-cat">05. TẦNG 2: MAP MATCHING</span>
+                    <h2 class="slide-title">Nắn đường & Đo khoảng cách sai lệch (OSRM C++)</h2>
+                </div>
+                <span class="slide-tagline">Hidden Markov Model (HMM) • Haversine Metric • Circuit Breaker</span>
+            </div>
+            <div class="grid-text-visual">
+                <div style="display:flex; flex-direction:column; gap:1.2rem;">
+                    <div class="card">
+                        <div class="card-header orange">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6" />
+                                <line x1="8" y1="2" x2="8" y2="18" />
+                                <line x1="16" y1="6" x2="16" y2="22" />
+                            </svg>
+                            Open Source Routing Machine (OSRM C++)
+                        </div>
+                        <div class="card-body">
+                            <ul>
+                                <li><span class="highlight">Engine C++ Docker:</span> Chạy độc lập, chỉ chiếm ~400MB RAM
+                                    cho toàn bộ bản đồ Việt Nam (MLD).</li>
+                                <li><span class="highlight">REST Endpoint:</span> Go gọi
+                                    <code>/match/v1/driving/...</code> với tập tọa độ GPS nghi vấn.</li>
+                                <li><span class="highlight" style="color:var(--accent-orange);">Strict Timeout
+                                        500ms:</span> Tự động ngắt kết nối nếu OSRM quá tải, bảo vệ toàn hệ thống.</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header cyan">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <circle cx="12" cy="12" r="10" />
+                                <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+                                <path d="M2 12h20" />
+                            </svg>
+                            Thuật toán HMM & Haversine Distance
+                        </div>
+                        <div class="card-body">
+                            <ul>
+                                <li><span class="highlight">Hidden Markov Model (HMM):</span> Khớp tọa độ GPS nhiễu vào
+                                    tim đường chính xác nhất theo xác suất chuyển trạng thái.</li>
+                                <li><span class="highlight">Haversine Distance:</span> Tính khoảng cách hình cầu giữa
+                                    điểm khớp và lộ trình chỉ định.</li>
+                                <li><span class="highlight" style="color:var(--accent-red);">Xác nhận vi phạm:</span> Nếu
+                                    khoảng cách &gt; 50 mét ➔ Kích hoạt sự kiện Lệch Tuyến.</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Visual HMM Map Matching SVG -->
+                <div class="diagram-container">
+                    <svg viewBox="0 0 380 340">
+                        <!-- Road Geometry -->
+                        <path d="M 30 180 Q 180 180 350 180" stroke="#cbd5e1" stroke-width="28"
+                            stroke-linecap="round" />
+                        <path d="M 30 180 Q 180 180 350 180" stroke="#d97706" stroke-width="2"
+                            stroke-dasharray="8 6" />
+                        <text x="50" y="155" fill="var(--text-muted)" font-size="10" font-family="'JetBrains Mono'">TIM ĐƯỜNG
+                            QUY ĐỊNH</text>
+
+                        <!-- Raw Noisy GPS Point -->
+                        <circle cx="210" cy="70" r="7" fill="#e11d48" />
+                        <circle cx="210" cy="70" r="18" fill="none" stroke="#e11d48" stroke-width="1.5"
+                            stroke-dasharray="3 2" opacity="0.6" />
+                        <text x="210" y="45" fill="#e11d48" font-size="11" font-weight="700" text-anchor="middle">GPS
+                            Thô (Nhiễu/Lệch)</text>
+
+                        <!-- Projection Line -->
+                        <line x1="210" y1="70" x2="210" y2="180" stroke="#ea580c" stroke-width="2.5"
+                            stroke-dasharray="4 3" />
+
+                        <!-- Snapped Point on Road -->
+                        <circle cx="210" cy="180" r="7" fill="#0284c7" />
+                        <text x="210" y="210" fill="#0284c7" font-size="10" font-weight="700"
+                            text-anchor="middle">Điểm khớp HMM</text>
+
+                        <!-- Distance Metric Badge -->
+                        <rect x="225" y="110" width="135" height="32" rx="6" fill="#ffffff" stroke="#ea580c" />
+                        <text x="292" y="125" fill="#ea580c" font-size="10" font-family="'JetBrains Mono'"
+                            font-weight="700" text-anchor="middle">Haversine Distance</text>
+                        <text x="292" y="137" fill="#e11d48" font-size="10" font-weight="800"
+                            text-anchor="middle">Δd = 128m &gt; 50m (ALERT)</text>
+
+                        <!-- Bottom Protection Indicator -->
+                        <rect x="40" y="280" width="300" height="35" rx="6" fill="rgba(2,132,199,0.1)"
+                            stroke="rgba(2,132,199,0.3)" />
+                        <text x="190" y="302" fill="#0284c7" font-size="10" font-family="'JetBrains Mono'"
+                            font-weight="600" text-anchor="middle">⚡ TIMEOUT 500ms — AN TOÀN TUYỆT ĐỐI</text>
+                    </svg>
+                    <div class="diagram-caption">Thuật toán HMM: Khớp GPS nhiễu vào tim đường và tính khoảng cách
+                        Haversine</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== SLIDE 7: Tier 3 Details ==================== -->
+        <div class="slide" id="slide-7">
+            <div class="slide-header">
+                <div class="slide-header-left">
+                    <span class="badge-cat">06. TẦNG 3: REAL-TIME BROADCAST</span>
+                    <h2 class="slide-title">Uber H3 Indexing & Lock-Free Aggregator</h2>
+                </div>
+                <span class="slide-tagline">Resolution 8 Hexagons • sync.Map + Atomic • Redis Pub/Sub</span>
+            </div>
+            <div class="grid-text-visual">
+                <div style="display:flex; flex-direction:column; gap:1.2rem;">
+                    <div class="card">
+                        <div class="card-header cyan">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M12 2l8.5 5v10L12 22l-8.5-5V7L12 2z" />
+                            </svg>
+                            Uber H3 Spatial Index (Resolution 8)
+                        </div>
+                        <div class="card-body">
+                            <ul>
+                                <li><span class="highlight">Độ phân giải Res 8 (~460m):</span> Diện tích 0.74 km² — Tối
+                                    ưu nhất cho quy mô khu phố đô thị Việt Nam.</li>
+                                <li><span class="highlight">Tính toán O(1) trên CPU:</span> Chuyển (Lat, Lng) ➔ H3 Cell
+                                    Hash dạng String tức thì, không cần tra cứu GIS.</li>
+                                <li><span class="highlight">Nén 98% dữ liệu:</span> Rút gọn từ 500KB GPS raw xuống chỉ
+                                    còn 10KB bản tin H3 tổng hợp.</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header green">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                            </svg>
+                            Lock-Free Concurrency & Redis Pub/Sub
+                        </div>
+                        <div class="card-body">
+                            <ul>
+                                <li><span class="highlight">sync.Map + atomic.AddUint64:</span> Hàng ngàn luồng đếm trên
+                                    RAM mà không cần khóa Mutex.</li>
+                                <li><span class="highlight">Snapshot 1 giây:</span> <code>atomic.SwapUint64</code> lấy
+                                    dữ liệu và reset bộ đếm trong 1 chu kỳ CPU.</li>
+                                <li><span class="highlight" style="color:var(--accent-green);">Zero Database I/O:</span>
+                                    Luồng phát nóng hoàn toàn không chạm vào ổ cứng Database!</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Visual H3 Hexagon Grid SVG -->
+                <div class="diagram-container">
+                    <svg viewBox="0 0 380 340">
+                        <defs>
+                            <radialGradient id="hexGlowRed" cx="50%" cy="50%" r="50%">
+                                <stop offset="0%" stop-color="#e11d48" stop-opacity="0.8" />
+                                <stop offset="100%" stop-color="#e11d48" stop-opacity="0.2" />
+                            </radialGradient>
+                            <radialGradient id="hexGlowOrange" cx="50%" cy="50%" r="50%">
+                                <stop offset="0%" stop-color="#ea580c" stop-opacity="0.7" />
+                                <stop offset="100%" stop-color="#ea580c" stop-opacity="0.2" />
+                            </radialGradient>
+                            <radialGradient id="hexGlowGreen" cx="50%" cy="50%" r="50%">
+                                <stop offset="0%" stop-color="#16a34a" stop-opacity="0.5" />
+                                <stop offset="100%" stop-color="#16a34a" stop-opacity="0.1" />
+                            </radialGradient>
+                        </defs>
+
+                        <!-- Central Hotspot Hexagon -->
+                        <polygon points="190,110 235,135 235,185 190,210 145,185 145,135" fill="url(#hexGlowRed)"
+                            stroke="#e11d48" stroke-width="2.5" />
+                        <text x="190" y="155" fill="#ffffff" font-size="11" font-family="'JetBrains Mono'"
+                            font-weight="800" text-anchor="middle">#883080...</text>
+                        <text x="190" y="172" fill="#ffffff" font-size="12" font-weight="800" text-anchor="middle">24
+                            XE LỆCH</text>
+
+                        <!-- Surrounding Hexagons -->
+                        <!-- Top Hex -->
+                        <polygon points="190,30 235,55 235,105 190,130 145,105 145,55" fill="url(#hexGlowOrange)"
+                            stroke="#ea580c" stroke-width="1.5" />
+                        <text x="190" y="85" fill="#ea580c" font-size="10" font-weight="700" text-anchor="middle">8
+                            XE</text>
+
+                        <!-- Top-Right Hex -->
+                        <polygon points="268,75 313,100 313,150 268,175 223,150 223,100" fill="url(#hexGlowGreen)"
+                            stroke="#16a34a" stroke-width="1.5" />
+                        <text x="268" y="130" fill="#16a34a" font-size="10" font-weight="700" text-anchor="middle">2
+                            XE</text>
+
+                        <!-- Bottom-Right Hex -->
+                        <polygon points="268,195 313,220 313,270 268,295 223,270 223,220"
+                            fill="rgba(2,132,199,0.08)" stroke="#0284c7" stroke-width="1.5" />
+                        <text x="268" y="250" fill="#0284c7" font-size="10" font-weight="700" text-anchor="middle">0
+                            XE</text>
+
+                        <!-- Bottom Hex -->
+                        <polygon points="190,240 235,265 235,315 190,340 145,315 145,265" fill="url(#hexGlowGreen)"
+                            stroke="#16a34a" stroke-width="1.5" />
+                        <text x="190" y="295" fill="#16a34a" font-size="10" font-weight="700" text-anchor="middle">1
+                            XE</text>
+
+                        <!-- Top-Left Hex -->
+                        <polygon points="112,75 157,100 157,150 112,175 67,150 67,100" fill="url(#hexGlowOrange)"
+                            stroke="#ea580c" stroke-width="1.5" />
+                        <text x="112" y="130" fill="#ea580c" font-size="10" font-weight="700" text-anchor="middle">6
+                            XE</text>
+
+                        <!-- Bottom-Left Hex -->
+                        <polygon points="112,195 157,220 157,270 112,295 67,270 67,220"
+                            fill="rgba(2,132,199,0.08)" stroke="#0284c7" stroke-width="1.5" />
+                        <text x="112" y="250" fill="#0284c7" font-size="10" font-weight="700" text-anchor="middle">0
+                            XE</text>
+                    </svg>
+                    <div class="diagram-caption">Uber H3 Res 8: Lục giác đều đồng nhất, tính toán O(1) không méo góc
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== SLIDE 8: Tier 4 Details ==================== -->
+        <div class="slide" id="slide-8">
+            <div class="slide-header">
+                <div class="slide-header-left">
+                    <span class="badge-cat">07. TẦNG 4: STORAGE & UI</span>
+                    <h2 class="slide-title">Lưu trữ bền vững & Render 3D WebGL (Deck.gl)</h2>
+                </div>
+                <span class="slide-tagline">Micro-batching 30s • PostGIS Spatial Indexing • GPU WebGL 60 FPS</span>
+            </div>
+            <div class="grid-text-visual">
+                <div style="display:flex; flex-direction:column; gap:1.2rem;">
+                    <div class="card">
+                        <div class="card-header purple">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                            </svg>
+                            PostgreSQL + PostGIS & Micro-batching 30s
+                        </div>
+                        <div class="card-body">
+                            <ul>
+                                <li><span class="highlight">Gom nhóm 30 giây (Batch Insert):</span> Gom hàng trăm sự
+                                    kiện ghi 1 lần duy nhất vào PostGIS.</li>
+                                <li><span class="highlight">Bảo vệ SSD & IOPS:</span> Giảm tải hơn 99% số lần ghi đĩa
+                                    so với ghi từng điểm.</li>
+                                <li><span class="highlight">GiST Spatial Index:</span> Phục vụ truy vấn lịch sử nhanh
+                                    chóng qua <code>/api/history</code>.</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header cyan">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <rect x="2" y="3" width="20" height="14" rx="2" />
+                                <line x1="8" y1="21" x2="16" y2="21" />
+                                <line x1="12" y1="17" x2="12" y2="21" />
+                            </svg>
+                            Deck.gl H3HexagonLayer & MapLibre GL
+                        </div>
+                        <div class="card-body">
+                            <ul>
+                                <li><span class="highlight">Render trực tiếp trên GPU:</span> Sử dụng WebGL xử lý đồ họa
+                                    trên máy khách.</li>
+                                <li><span class="highlight">Cột 3D Động (Elevation):</span> Chiều cao cột tự động nhô
+                                    lên tỷ lệ thuận với số lượng tài xế vi phạm.</li>
+                                <li><span class="highlight" style="color:var(--accent-cyan);">60 FPS Mượt mà:</span>
+                                    Giải phóng hoàn toàn 100% tài nguyên đồ họa cho máy chủ.</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Visual 3D Hexagon WebGL Rendering SVG -->
+                <div class="diagram-container">
+                    <svg viewBox="0 0 380 340">
+                        <defs>
+                            <linearGradient id="colRed" x1="0%" y1="0%" x2="0%" y2="100%">
+                                <stop offset="0%" stop-color="#e11d48" />
+                                <stop offset="100%" stop-color="#881337" />
+                            </linearGradient>
+                            <linearGradient id="colOrange" x1="0%" y1="0%" x2="0%" y2="100%">
+                                <stop offset="0%" stop-color="#ea580c" />
+                                <stop offset="100%" stop-color="#78350f" />
+                            </linearGradient>
+                            <linearGradient id="colGreen" x1="0%" y1="0%" x2="0%" y2="100%">
+                                <stop offset="0%" stop-color="#16a34a" />
+                                <stop offset="100%" stop-color="#14532d" />
+                            </linearGradient>
+                        </defs>
+
+                        <!-- Perspective Grid Base -->
+                        <polygon points="190,290 350,220 190,170 30,220" fill="var(--svg-box-bg)"
+                            stroke="rgba(203,213,225,0.8)" stroke-width="1.5" />
+                        <line x1="110" y1="195" x2="270" y2="255" stroke="rgba(203,213,225,0.6)" />
+                        <line x1="270" y1="195" x2="110" y2="255" stroke="rgba(203,213,225,0.6)" />
+
+                        <!-- Low Elevation Hexagon (Green) -->
+                        <polygon points="100,210 130,225 130,240 100,250 70,240 70,225" fill="url(#colGreen)"
+                            opacity="0.9" />
+
+                        <!-- Medium Elevation Hexagon (Orange) -->
+                        <polygon points="270,170 305,185 305,225 270,240 235,225 235,185" fill="url(#colOrange)"
+                            opacity="0.9" />
+                        <polygon points="270,170 305,185 270,195 235,185" fill="#fdba74" />
+
+                        <!-- High Elevation Hexagon (Red 3D Pillar) -->
+                        <!-- 3D Sides -->
+                        <polygon points="190,70 235,90 235,210 190,230 145,210 145,90" fill="url(#colRed)" />
+                        <!-- 3D Top Cap -->
+                        <polygon points="190,70 235,90 190,105 145,90" fill="#fca5a5" filter="url(#glowEffect)" />
+
+                        <text x="190" y="55" fill="#e11d48" font-size="12" font-family="'JetBrains Mono'"
+                            font-weight="900" text-anchor="middle">3D ELEVATION</text>
+                        <text x="190" y="145" fill="#ffffff" font-size="11" font-weight="800"
+                            text-anchor="middle">MẬT ĐỘ CAO</text>
+
+                        <!-- WebGL 60 FPS Badge -->
+                        <rect x="40" y="20" width="130" height="28" rx="6" fill="#ffffff" stroke="#16a34a" />
+                        <text x="105" y="38" fill="#16a34a" font-size="10" font-family="'JetBrains Mono'"
+                            font-weight="700" text-anchor="middle">⚡ WEBGL 60 FPS</text>
+                    </svg>
+                    <div class="diagram-caption">Deck.gl 3D WebGL: Cột lục giác nhô cao theo thời gian thực trên card
+                        đồ họa</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== SLIDE 9: AI ReAct Agent ==================== -->
+        <div class="slide" id="slide-9">
+            <div class="slide-header">
+                <div class="slide-header-left">
+                    <span class="badge-cat">08. AI INVESTIGATION AGENT</span>
+                    <h2 class="slide-title">Tự động chẩn đoán nguyên nhân gốc rễ (Root-Cause)</h2>
+                </div>
+                <span class="slide-tagline">ReAct Loop (Thought ➔ Action ➔ Observation) • 7 Toolkits • Zero
+                    Hallucination</span>
+            </div>
+            <div class="grid-text-visual">
+                <div style="display:flex; flex-direction:column; gap:1rem;">
+                    <div class="card">
+                        <div class="card-header purple">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M12 2a8 8 0 0 0-8 8c0 5 8 12 8 12s8-7 8-12a8 8 0 0 0-8-8z" />
+                                <circle cx="12" cy="10" r="3" />
+                            </svg>
+                            Mô hình ReAct (Reasoning + Acting) & 7 Toolkits
+                        </div>
+                        <div class="card-body">
+                            <p style="margin-bottom:0.7rem; color:var(--text-main); font-size:0.9rem;">
+                                AI tự động lập luận và thu thập chứng cứ thực tế (Grounded Evidence), <strong>loại bỏ
+                                    hiện tượng bịa đặt:</strong>
+                            </p>
+                            <div class="grid-split-2" style="gap:0.7rem; margin-bottom:0.6rem;">
+                                <div>
+                                    <ul style="font-size:0.84rem;">
+                                        <li><code>db_telemetry</code>: Tra cứu vi phạm PostGIS.</li>
+                                        <li><code>driver_profile</code>: Đánh giá uy tín tài xế.</li>
+                                        <li><code>weather</code>: Kiểm tra mưa bão ngập lụt.</li>
+                                        <li><code>traffic_speed_ratio</code>: Đo độ kẹt xe.</li>
+                                    </ul>
+                                </div>
+                                <div>
+                                    <ul style="font-size:0.84rem;">
+                                        <li><code>osrm_alternatives</code>: Tìm đường vòng hợp lý.</li>
+                                        <li><code>reverse_geocode</code>: Lấy tên đường & địa chỉ.</li>
+                                        <li><code>news_search</code>: Quét tin cấm đường/thi công.</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Case study banner -->
+                    <div class="card"
+                        style="padding: 1rem 1.3rem; border-color: var(--accent-green); background: rgba(22, 163, 74, 0.08);">
+                        <div
+                            style="font-weight: 700; color: var(--accent-green); font-size: 0.95rem; display:flex; align-items:center; gap:0.5rem;">
+                            <span>💡</span> Case Study Thực tế:
+                        </div>
+                        <p style="font-size:0.86rem; color:var(--text-main); margin-top:0.3rem;">
+                            Mưa 50mm + Tin tức cấm đường ➔ AI kết luận: <em
+                                style="color:var(--accent-green); font-weight:700;">Né ngập hợp lệ (Không phạt)</em><br>
+                            Đường thông thoáng mà đi vòng ➔ <em style="color:var(--accent-red); font-weight:700;">Cảnh
+                                báo gian lận cước!</em>
+                        </p>
+                    </div>
+                </div>
+
+                <!-- Visual AI ReAct Loop SVG -->
+                <div class="diagram-container">
+                    <svg viewBox="0 0 380 340">
+                        <!-- ReAct Loop Center Circle -->
+                        <circle cx="190" cy="170" r="60" fill="rgba(124,58,237,0.1)" stroke="#7c3aed"
+                            stroke-width="2" />
+                        <text x="190" y="165" fill="var(--text-main)" font-size="12" font-family="'JetBrains Mono'"
+                            font-weight="900" text-anchor="middle">AI ReAct</text>
+                        <text x="190" y="180" fill="#7c3aed" font-size="10" font-weight="700"
+                            text-anchor="middle">ENGINE</text>
+
+                        <!-- Step 1: Thought -->
+                        <rect x="40" y="30" width="120" height="42" rx="6" fill="#ffffff" stroke="#0284c7" />
+                        <text x="100" y="48" fill="#0284c7" font-size="10" font-family="'JetBrains Mono'"
+                            font-weight="700" text-anchor="middle">1. THOUGHT</text>
+                        <text x="100" y="62" fill="var(--text-muted)" font-size="9" text-anchor="middle">Phân tích nghi vấn</text>
+
+                        <!-- Step 2: Tool Call -->
+                        <rect x="220" y="30" width="120" height="42" rx="6" fill="#ffffff" stroke="#ea580c" />
+                        <text x="280" y="48" fill="#ea580c" font-size="10" font-family="'JetBrains Mono'"
+                            font-weight="700" text-anchor="middle">2. TOOL CALL</text>
+                        <text x="280" y="62" fill="var(--text-muted)" font-size="9" text-anchor="middle">Gọi 7 Toolkits</text>
+
+                        <!-- Step 3: Observation -->
+                        <rect x="220" y="270" width="120" height="42" rx="6" fill="#ffffff" stroke="#16a34a" />
+                        <text x="280" y="288" fill="#16a34a" font-size="10" font-family="'JetBrains Mono'"
+                            font-weight="700" text-anchor="middle">3. OBSERVATION</text>
+                        <text x="280" y="302" fill="var(--text-muted)" font-size="9" text-anchor="middle">Thu thập dữ kiện</text>
+
+                        <!-- Step 4: Final Verdict -->
+                        <rect x="40" y="270" width="120" height="42" rx="6" fill="#ffffff" stroke="#7c3aed" />
+                        <text x="100" y="288" fill="#7c3aed" font-size="10" font-family="'JetBrains Mono'"
+                            font-weight="700" text-anchor="middle">4. VERDICT</text>
+                        <text x="100" y="302" fill="var(--text-muted)" font-size="9" text-anchor="middle">Báo cáo & Kết luận</text>
+
+                        <!-- Connecting Arrows -->
+                        <path d="M 160 50 L 220 50" stroke="#0284c7" stroke-width="2" marker-end="url(#arrow)" />
+                        <path d="M 280 72 L 280 270" stroke="#ea580c" stroke-width="2" stroke-dasharray="3 3" />
+                        <path d="M 220 290 L 160 290" stroke="#16a34a" stroke-width="2" />
+                        <path d="M 100 270 L 100 72" stroke="#7c3aed" stroke-width="2" stroke-dasharray="3 3" />
+                    </svg>
+                    <div class="diagram-caption">Vòng lặp ReAct: Tự động suy luận & kiểm chứng đa nguồn trước khi kết
+                        luận</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== SLIDE 10: Resource Budget & Benchmark ==================== -->
+        <div class="slide" id="slide-10">
+            <div class="slide-header">
+                <div class="slide-header-left">
+                    <span class="badge-cat">09. NGÂN SÁCH TÀI NGUYÊN & BENCHMARKS</span>
+                    <h2 class="slide-title">Tối ưu hóa cực hạn trên VPS 4GB RAM</h2>
+                </div>
+                <span class="slide-tagline">RAM Budget Allocation • End-to-End Latency • System KPIs</span>
+            </div>
+            <div class="grid-split-2">
+                <div class="card">
+                    <div class="card-header gold">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <rect x="2" y="2" width="20" height="8" rx="2" />
+                            <rect x="2" y="14" width="20" height="8" rx="2" />
+                            <line x1="6" y1="6" x2="6.01" y2="6" />
+                            <line x1="6" y1="18" x2="6.01" y2="18" />
+                        </svg>
+                        Phân bổ RAM trên VPS 4GB
+                    </div>
+                    <div class="card-body" style="display:flex; flex-direction:row; align-items:center; gap:1rem;">
+                        <!-- Chart.js Canvas -->
+                        <div style="width: 170px; height: 170px; position:relative; flex-shrink:0;">
+                            <canvas id="ramChart"></canvas>
+                        </div>
+                        <div style="flex:1;">
+                            <table class="table-custom" style="font-size:0.8rem;">
+                                <tbody>
+                                    <tr>
+                                        <td>Linux OS</td>
+                                        <td>500 MB</td>
+                                    </tr>
+                                    <tr>
+                                        <td>PostGIS</td>
+                                        <td>800 MB</td>
+                                    </tr>
+                                    <tr>
+                                        <td>OSRM C++</td>
+                                        <td>400 MB</td>
+                                    </tr>
+                                    <tr>
+                                        <td>Redis</td>
+                                        <td>200 MB</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong style="color:var(--accent-green);">Go Backend</strong></td>
+                                        <td><strong style="color:var(--accent-green);">&lt; 40 MB</strong></td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong style="color:var(--accent-cyan);">DỰ PHÒNG</strong></td>
+                                        <td><strong style="color:var(--accent-cyan);">&gt; 2.0 GB</strong></td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header green">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+                            <polyline points="22 4 12 14.01 9 11.01" />
+                        </svg>
+                        Chỉ số Hiệu năng Đo lường (KPIs)
+                    </div>
+                    <div class="card-body">
+                        <div class="grid-split-2" style="gap:0.8rem; margin-bottom:0.8rem;">
+                            <div class="stat-badge">
+                                <span class="num">&lt; 1.0 s</span>
+                                <span class="lbl">Độ trễ toàn trình (E2E)</span>
+                            </div>
+                            <div class="stat-badge">
+                                <span class="num">&lt; 100 ms</span>
+                                <span class="lbl">Độ trễ luồng nóng</span>
+                            </div>
+                            <div class="stat-badge">
+                                <span class="num">&lt; 1 KB</span>
+                                <span class="lbl">Băng thông Sim ➔ Go</span>
+                            </div>
+                            <div class="stat-badge">
+                                <span class="num">60 FPS</span>
+                                <span class="lbl">Hiển thị 3D WebGL</span>
+                            </div>
+                        </div>
+                        <div style="font-size:0.85rem; color:var(--text-muted); line-height:1.5;">
+                            ⚡ <strong>Độ ổn định cao:</strong> Chạy liên tục với 500 xe đồng thời mà không bị rò rỉ bộ
+                            nhớ (Zero Memory Leak) nhờ kiến trúc Goroutines và sync.Map.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== SLIDE 11: Simulator ==================== -->
+        <div class="slide" id="slide-11">
+            <div class="slide-header">
+                <div class="slide-header-left">
+                    <span class="badge-cat">10. BỘ GIẢ LẬP ĐA LUỒNG</span>
+                    <h2 class="slide-title">Multi-threaded Driver Simulator (Web Workers)</h2>
+                </div>
+                <span class="slide-tagline">Web Workers Threads • GPS Jitter & Noise • Deviation Injection</span>
+            </div>
+            <div class="grid-text-visual">
+                <div style="display:flex; flex-direction:column; gap:1.2rem;">
+                    <div class="card">
+                        <div class="card-header cyan">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <circle cx="12" cy="12" r="3" />
+                                <path
+                                    d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                            </svg>
+                            Kiến trúc Đa luồng Web Workers
+                        </div>
+                        <div class="card-body">
+                            <ul>
+                                <li><span class="highlight">Không block UI:</span> 4 Web Worker threads chạy nền, tính
+                                    toán tọa độ cho 500+ xe mà trình duyệt vẫn mượt 60 FPS.</li>
+                                <li><span class="highlight">Dữ liệu bản đồ thực tế:</span> Xe di chuyển theo các tuyến
+                                    đường thực tại TP.HCM.</li>
+                                <li><span class="highlight">Protobuf Streaming:</span> Tự động encode nhị phân và gửi
+                                    qua WebSocket.</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header orange">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path
+                                    d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+                            </svg>
+                            Kịch bản Kiểm thử Chủ động (Testing)
+                        </div>
+                        <div class="card-body">
+                            <ul>
+                                <li><span class="highlight">Deviation Injection:</span> Bơm các kịch bản tài xế đi đường
+                                    vòng, lạc đường có chủ đích.</li>
+                                <li><span class="highlight">GPS Noise & Jitter:</span> Giả lập sai số định vị GPS vệ
+                                    tinh 5-15m và trễ mạng 4G thực tế.</li>
+                                <li><span class="highlight">Stress Test:</span> Kiểm thử sức chịu tải và độ ổn định của
+                                    cụm server.</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Visual Web Workers Multi-threading SVG -->
+                <div class="diagram-container">
+                    <svg viewBox="0 0 380 340">
+                        <!-- Main Thread -->
+                        <rect x="30" y="20" width="320" height="50" rx="8" fill="var(--svg-box-bg)"
+                            stroke="#0284c7" stroke-width="1.5" />
+                        <text x="50" y="45" fill="#0284c7" font-size="11" font-family="'JetBrains Mono'"
+                            font-weight="700">MAIN UI THREAD (React UI - Smooth 60 FPS)</text>
+                        <text x="50" y="60" fill="var(--text-muted)" font-size="9">Không bị nghẽn (Zero Jank) khi tính toán
+                            hàng trăm xe</text>
+
+                        <!-- Workers Cluster -->
+                        <rect x="30" y="100" width="320" height="150" rx="8" fill="var(--svg-box-bg)"
+                            stroke="#ea580c" stroke-width="1.5" />
+                        <text x="50" y="125" fill="#ea580c" font-size="11" font-family="'JetBrains Mono'"
+                            font-weight="700">WEB WORKERS BACKGROUND CLUSTER</text>
+
+                        <!-- Worker 1 -->
+                        <rect x="50" y="140" width="130" height="42" rx="6" fill="#ffffff"
+                            stroke="rgba(234,88,12,0.5)" />
+                        <text x="115" y="158" fill="var(--text-main)" font-size="10" font-weight="700"
+                            text-anchor="middle">Worker #1 (125 xe)</text>
+                        <text x="115" y="172" fill="#16a34a" font-size="8" text-anchor="middle">Normal Route</text>
+
+                        <!-- Worker 2 -->
+                        <rect x="200" y="140" width="130" height="42" rx="6" fill="#ffffff"
+                            stroke="rgba(225,29,72,0.8)" />
+                        <text x="265" y="158" fill="var(--text-main)" font-size="10" font-weight="700"
+                            text-anchor="middle">Worker #2 (125 xe)</text>
+                        <text x="265" y="172" fill="#e11d48" font-size="8" font-weight="700" text-anchor="middle">⚡
+                            INJECT DEVIATION</text>
+
+                        <!-- Worker 3 & 4 -->
+                        <rect x="50" y="195" width="130" height="42" rx="6" fill="#ffffff"
+                            stroke="rgba(234,88,12,0.5)" />
+                        <text x="115" y="213" fill="var(--text-main)" font-size="10" font-weight="700"
+                            text-anchor="middle">Worker #3 (125 xe)</text>
+                        <text x="115" y="227" fill="#16a34a" font-size="8" text-anchor="middle">Normal Route</text>
+
+                        <rect x="200" y="195" width="130" height="42" rx="6" fill="#ffffff"
+                            stroke="rgba(234,88,12,0.5)" />
+                        <text x="265" y="213" fill="var(--text-main)" font-size="10" font-weight="700"
+                            text-anchor="middle">Worker #4 (125 xe)</text>
+                        <text x="265" y="227" fill="#d97706" font-size="8" text-anchor="middle">GPS Noise
+                            Simulation</text>
+
+                        <!-- Bottom Stream Output -->
+                        <path d="M190 250 L190 280" stroke="#0284c7" stroke-width="2" stroke-dasharray="3 3" />
+                        <rect x="50" y="285" width="280" height="35" rx="6" fill="#ffffff" stroke="#0284c7" />
+                        <text x="190" y="307" fill="#0284c7" font-size="10" font-family="'JetBrains Mono'"
+                            font-weight="700" text-anchor="middle">➔ WEBSOCKET STREAMING (Protobuf 3s)</text>
+                    </svg>
+                    <div class="diagram-caption">Kiến trúc Đa luồng Web Workers: Mô phỏng hàng trăm xe chân thực</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== SLIDE 12: Live Demo Workflow ==================== -->
+        <div class="slide" id="slide-12">
+            <div class="slide-header">
+                <div class="slide-header-left">
+                    <span class="badge-cat">11. KỊCH BẢN TRÌNH DIỄN</span>
+                    <h2 class="slide-title">Quy trình Demo trực tiếp (Live Demonstration)</h2>
+                </div>
+                <span class="slide-tagline">4-Step Live Demonstration Workflow</span>
+            </div>
+            <div class="grid-split-4">
+                <div class="card" style="border-top: 4px solid var(--accent-cyan);">
+                    <div class="card-header cyan">BƯỚC 1</div>
+                    <div class="card-body">
+                        <!-- Step 1 SVG -->
+                        <div style="height:80px; margin-bottom:0.6rem;">
+                            <svg viewBox="0 0 160 80" style="width:100%; height:100%;">
+                                <circle cx="80" cy="40" r="28" fill="rgba(2,132,199,0.12)" stroke="#0284c7"
+                                    stroke-width="2" />
+                                <polygon points="72,28 94,40 72,52" fill="#0284c7" />
+                            </svg>
+                        </div>
+                        <h4 style="color:var(--text-main); margin-bottom:0.4rem; font-size:1rem;">Khởi động Simulator
+                        </h4>
+                        <p style="font-size:0.85rem;">Bật 300 xe ảo chạy quanh bản đồ TP.HCM qua Web Workers đa luồng.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="card" style="border-top: 4px solid var(--accent-orange);">
+                    <div class="card-header orange">BƯỚC 2</div>
+                    <div class="card-body">
+                        <!-- Step 2 SVG -->
+                        <div style="height:80px; margin-bottom:0.6rem;">
+                            <svg viewBox="0 0 160 80" style="width:100%; height:100%;">
+                                <circle cx="80" cy="40" r="28" fill="rgba(234,88,12,0.12)" stroke="#ea580c"
+                                    stroke-width="2" />
+                                <path d="M 60 40 Q 80 15 100 40" fill="none" stroke="#ea580c" stroke-width="3"
+                                    stroke-dasharray="3 2" />
+                                <circle cx="100" cy="40" r="4" fill="#e11d48" />
+                            </svg>
+                        </div>
+                        <h4 style="color:var(--text-main); margin-bottom:0.4rem; font-size:1rem;">Bơm kịch bản Lệch</h4>
+                        <p style="font-size:0.85rem;">Click "Inject Deviation" để giả lập một nhóm tài xế rẽ sai lộ
+                            trình quy định.</p>
+                    </div>
+                </div>
+
+                <div class="card" style="border-top: 4px solid var(--accent-green);">
+                    <div class="card-header green">BƯỚC 3</div>
+                    <div class="card-body">
+                        <!-- Step 3 SVG -->
+                        <div style="height:80px; margin-bottom:0.6rem;">
+                            <svg viewBox="0 0 160 80" style="width:100%; height:100%;">
+                                <polygon points="80,10 110,25 110,55 80,70 50,55 50,25" fill="rgba(225,29,72,0.15)"
+                                    stroke="#e11d48" stroke-width="2" />
+                                <text x="80" y="45" fill="#e11d48" font-size="12" font-weight="800"
+                                    text-anchor="middle">&lt; 1s</text>
+                            </svg>
+                        </div>
+                        <h4 style="color:var(--text-main); margin-bottom:0.4rem; font-size:1rem;">Quan sát 3D Heatmap
+                        </h4>
+                        <p style="font-size:0.85rem;">Cột lục giác H3 nhô cao và chuyển đỏ rực tức thì trên Dashboard
+                            (&lt;1s).</p>
+                    </div>
+                </div>
+
+                <div class="card" style="border-top: 4px solid var(--accent-purple);">
+                    <div class="card-header purple">BƯỚC 4</div>
+                    <div class="card-body">
+                        <!-- Step 4 SVG -->
+                        <div style="height:80px; margin-bottom:0.6rem;">
+                            <svg viewBox="0 0 160 80" style="width:100%; height:100%;">
+                                <circle cx="80" cy="40" r="28" fill="rgba(124,58,237,0.12)" stroke="#7c3aed"
+                                    stroke-width="2" />
+                                <path d="M68 40 L76 48 L92 32" stroke="#7c3aed" stroke-width="3" fill="none" />
+                            </svg>
+                        </div>
+                        <h4 style="color:var(--text-main); margin-bottom:0.4rem; font-size:1rem;">Kích hoạt AI Agent
+                        </h4>
+                        <p style="font-size:0.85rem;">AI tự động gọi 7 Tools và xuất kết luận chẩn đoán trong 3 giây.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== SLIDE 13: Demo Giao Diện Thực Tế ==================== -->
+        <div class="slide" id="slide-13">
+            <div class="slide-header">
+                <div class="slide-header-left">
+                    <span class="badge-cat">12. DEMO SẢN PHẨM</span>
+                    <h2 class="slide-title">Giao diện Heatmap Admin Dashboard</h2>
+                </div>
+                <span class="slide-tagline">Real-time 2D Tracking • 3D H3 Hexagon Grid</span>
+            </div>
+            <div class="grid-split-3" style="margin-top: 0.5rem; gap: 1.5rem;">
+                <div class="card" style="padding: 1rem;">
+                    <div class="card-header cyan" style="font-size: 1rem; margin-bottom: 0.5rem;">2D Live Heatmap</div>
+                    <div style="width: 100%; height: 280px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border-card);">
+                        <img src="assets/demo_2d.png" alt="2D Heatmap" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 400 300\'><rect width=\'400\' height=\'300\' fill=\'%23f1f5f9\'/><text x=\'50%\' y=\'50%\' dominant-baseline=\'middle\' text-anchor=\'middle\' font-family=\'sans-serif\' font-size=\'12\' fill=\'%2364748b\'>Lưu ảnh thành: assets/demo_2d.png</text></svg>'">
+                    </div>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.8rem; line-height: 1.4;">Theo dõi thời gian thực các lộ trình bị lệch tuyến (màu cam/đỏ) so với tuyến đường quy định.</p>
+                </div>
+                
+                <div class="card" style="padding: 1rem;">
+                    <div class="card-header orange" style="font-size: 1rem; margin-bottom: 0.5rem;">3D H3 Hexagon Grid</div>
+                    <div style="width: 100%; height: 280px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border-card);">
+                        <img src="assets/demo_3d_1.png" alt="3D Grid" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 400 300\'><rect width=\'400\' height=\'300\' fill=\'%23f1f5f9\'/><text x=\'50%\' y=\'50%\' dominant-baseline=\'middle\' text-anchor=\'middle\' font-family=\'sans-serif\' font-size=\'12\' fill=\'%2364748b\'>Lưu ảnh thành: assets/demo_3d_1.png</text></svg>'">
+                    </div>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.8rem; line-height: 1.4;">Chế độ xem 3D lưới lục giác (Uber H3), độ cao cột biểu thị mật độ vi phạm tại khu vực.</p>
+                </div>
+
+                <div class="card" style="padding: 1rem;">
+                    <div class="card-header purple" style="font-size: 1rem; margin-bottom: 0.5rem;">Phân tích Mật độ</div>
+                    <div style="width: 100%; height: 280px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border-card);">
+                        <img src="assets/demo_3d_2.png" alt="3D Analytics" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 400 300\'><rect width=\'400\' height=\'300\' fill=\'%23f1f5f9\'/><text x=\'50%\' y=\'50%\' dominant-baseline=\'middle\' text-anchor=\'middle\' font-family=\'sans-serif\' font-size=\'12\' fill=\'%2364748b\'>Lưu ảnh thành: assets/demo_3d_2.png</text></svg>'">
+                    </div>
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.8rem; line-height: 1.4;">Trực quan hóa khối lượng dữ liệu khổng lồ bằng Deck.gl. Các vùng màu nhận diện rõ ranh giới vi phạm.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== SLIDE 14: Summary & Business Value ==================== -->
+        <div class="slide" id="slide-14">
+            <div class="slide-header">
+                <div class="slide-header-left">
+                    <span class="badge-cat">13. TỔNG KẾT & ĐỊNH HƯỚNG</span>
+                    <h2 class="slide-title">Giá trị thực tiễn & Hướng phát triển tương lai</h2>
+                </div>
+                <span class="slide-tagline">Business ROI • Operational Excellence • Future Milestones</span>
+            </div>
+            <div class="grid-split-2">
+                <div class="card">
+                    <div class="card-header green">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <line x1="12" y1="1" x2="12" y2="23" />
+                            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+                        </svg>
+                        Giá trị Doanh nghiệp & Vận hành (ROI)
+                    </div>
+                    <div class="card-body">
+                        <div class="grid-split-2" style="gap:0.8rem; margin-bottom:1rem;">
+                            <div class="stat-badge" style="border-color:rgba(22,163,74,0.4);">
+                                <span class="num" style="color:var(--accent-green);">GIẢM 40%</span>
+                                <span class="lbl">Chi phí CSKH & Rà soát</span>
+                            </div>
+                            <div class="stat-badge" style="border-color:rgba(2,132,199,0.4);">
+                                <span class="num" style="color:var(--accent-cyan);">~10$/THÁNG</span>
+                                <span class="lbl">Chi phí VPS 4GB</span>
+                            </div>
+                        </div>
+                        <ul>
+                            <li><span class="highlight">Phát hiện gian lận tức thì:</span> Ngăn chặn tình trạng tài xế
+                                cố tình đi vòng để tăng cước xe.</li>
+                            <li><span class="highlight">Bằng chứng minh bạch:</span> AI cung cấp đầy đủ dữ kiện thời
+                                tiết, giao thông khi đối soát khiếu nại.</li>
+                            <li><span class="highlight">Tối ưu chi phí hạ tầng:</span> Vận hành ổn định trên VPS giá rẻ
+                                (~10$/tháng).</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header purple">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                        </svg>
+                        Lộ trình Phát triển Tiếp theo (Roadmap)
+                    </div>
+                    <div class="card-body">
+                        <div class="tier-list" style="gap:0.6rem;">
+                            <div class="tier-item" style="padding:0.7rem 1rem;">
+                                <div class="tier-num"
+                                    style="font-size:0.85rem; min-width:70px; background:rgba(124,58,237,0.12); color:var(--accent-purple);">
+                                    PHA 1</div>
+                                <div class="tier-content">
+                                    <h4 style="font-size:0.92rem;">Predictive ML Model</h4>
+                                    <p style="font-size:0.8rem;">Dự báo trước các điểm nóng tắc đường & nguy cơ lệch
+                                        tuyến.</p>
+                                </div>
+                            </div>
+                            <div class="tier-item" style="padding:0.7rem 1rem;">
+                                <div class="tier-num"
+                                    style="font-size:0.85rem; min-width:70px; background:rgba(2,132,199,0.12); color:var(--accent-cyan);">
+                                    PHA 2</div>
+                                <div class="tier-content">
+                                    <h4 style="font-size:0.92rem;">Dynamic Risk Pricing</h4>
+                                    <p style="font-size:0.8rem;">Tự động cảnh báo rủi ro tuyến đường cho tài xế trước
+                                        khi nhận cuốc.</p>
+                                </div>
+                            </div>
+                            <div class="tier-item" style="padding:0.7rem 1rem;">
+                                <div class="tier-num"
+                                    style="font-size:0.85rem; min-width:70px; background:rgba(22,163,74,0.12); color:var(--accent-green);">
+                                    PHA 3</div>
+                                <div class="tier-content">
+                                    <h4 style="font-size:0.92rem;">Multi-region K8s Cluster</h4>
+                                    <p style="font-size:0.8rem;">Triển khai cụm Kubernetes đa vùng chịu tải toàn quốc.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Navigation Control Bar -->
+    <div class="nav-bar">
+        <button class="nav-btn" id="prevBtn" title="Slide trước (Phím Mũi tên Trái)">◀</button>
+        <span class="slide-counter" id="slideCounter">01 / 14</span>
+        <button class="nav-btn" id="nextBtn" title="Slide tiếp (Phím Mũi tên Phải hoặc Phím Cách)">▶</button>
+        <button class="nav-pill-btn" id="overviewBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="7" height="7" />
+                <rect x="14" y="3" width="7" height="7" />
+                <rect x="14" y="14" width="7" height="7" />
+                <rect x="3" y="14" width="7" height="7" />
+            </svg>
+            Tổng quan (O)
+        </button>
+        <button class="nav-pill-btn" id="themeBtn" title="Chuyển chế độ Sáng / Tối (T)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="5" />
+                <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+            </svg>
+            <span id="themeBtnText">Tối (T)</span>
+        </button>
+        <button class="nav-pill-btn" id="laserBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10" />
+                <circle cx="12" cy="12" r="2" />
+            </svg>
+            Laser (L)
+        </button>
+        <button class="nav-pill-btn" id="fsBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+            </svg>
+            Toàn màn hình (F)
+        </button>
+        <div class="timer-display">
+            <span>⏱️</span> <span id="timerText">00:00</span>
+        </div>
+    </div>
+
+    <!-- Slide Overview Modal -->
+    <div class="modal-overview" id="modalOverview">
+        <div class="overview-header">
+            <h2 style="font-size: 1.6rem; color: var(--accent-cyan); font-weight:800;">Danh mục Slides Thuyết trình</h2>
+            <button class="nav-btn" id="closeOverviewBtn" style="font-size: 1.5rem;">✕</button>
+        </div>
+        <div class="overview-grid" id="overviewGrid"></div>
+    </div>
+
+    <script>
+        // Slide Deck Logic
+        const slides = document.querySelectorAll('.slide');
+        const prevBtn = document.getElementById('prevBtn');
+        const nextBtn = document.getElementById('nextBtn');
+        const slideCounter = document.getElementById('slideCounter');
+        const progressBar = document.getElementById('progressBar');
+        const overviewBtn = document.getElementById('overviewBtn');
+        const modalOverview = document.getElementById('modalOverview');
+        const closeOverviewBtn = document.getElementById('closeOverviewBtn');
+        const overviewGrid = document.getElementById('overviewGrid');
+        const fsBtn = document.getElementById('fsBtn');
+        const laserBtn = document.getElementById('laserBtn');
+        const laserPointer = document.getElementById('laserPointer');
+        const timerText = document.getElementById('timerText');
+        const themeBtn = document.getElementById('themeBtn');
+        const themeBtnText = document.getElementById('themeBtnText');
+
+        let currentSlide = 0;
+        let isLaserActive = false;
+        let timerSeconds = 0;
+
+        // Presentation Timer
+        setInterval(() => {
+            timerSeconds++;
+            const mins = String(Math.floor(timerSeconds / 60)).padStart(2, '0');
+            const secs = String(timerSeconds % 60).padStart(2, '0');
+            timerText.textContent = `${mins}:${secs}`;
+        }, 1000);
+
+        function updateSlide(index) {
+            slides.forEach((slide, i) => {
+                slide.classList.toggle('active', i === index);
+            });
+            slideCounter.textContent = `${String(index + 1).padStart(2, '0')} / ${String(slides.length).padStart(2, '0')}`;
+            progressBar.style.width = `${((index + 1) / slides.length) * 100}%`;
+            currentSlide = index;
+
+            // Trigger Chart.js render on Slide 10 if needed
+            if (index === 9) {
+                initRamChart();
+            }
+        }
+
+        function nextSlide() {
+            currentSlide = (currentSlide + 1) % slides.length;
+            updateSlide(currentSlide);
+        }
+
+        function prevSlide() {
+            currentSlide = (currentSlide - 1 + slides.length) % slides.length;
+            updateSlide(currentSlide);
+        }
+
+        nextBtn.addEventListener('click', nextSlide);
+        prevBtn.addEventListener('click', prevSlide);
+
+        // Theme Toggle (Light / Dark)
+        function toggleTheme() {
+            document.body.classList.toggle('theme-dark');
+            const isDark = document.body.classList.contains('theme-dark');
+            themeBtnText.textContent = isDark ? 'Sáng (T)' : 'Tối (T)';
+            if (ramChartInstance) {
+                ramChartInstance.destroy();
+                ramChartInstance = null;
+                initRamChart();
+            }
+        }
+        themeBtn.addEventListener('click', toggleTheme);
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (modalOverview.classList.contains('active')) {
+                if (e.key === 'Escape' || e.key === 'o' || e.key === 'O') {
+                    modalOverview.classList.remove('active');
+                }
+                return;
+            }
+
+            if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') {
+                e.preventDefault();
+                nextSlide();
+            }
+            if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+                e.preventDefault();
+                prevSlide();
+            }
+            if (e.key === 'Home') {
+                e.preventDefault();
+                updateSlide(0);
+            }
+            if (e.key === 'End') {
+                e.preventDefault();
+                updateSlide(slides.length - 1);
+            }
+            if (e.key === 'o' || e.key === 'O') {
+                toggleOverview();
+            }
+            if (e.key === 't' || e.key === 'T') {
+                toggleTheme();
+            }
+            if (e.key === 'f' || e.key === 'F') {
+                toggleFullScreen();
+            }
+            if (e.key === 'l' || e.key === 'L') {
+                toggleLaser();
+            }
+        });
+
+        // Overview Modal
+        function populateOverview() {
+            overviewGrid.innerHTML = '';
+            slides.forEach((slide, i) => {
+                const titleEl = slide.querySelector('.slide-title') || slide.querySelector('.hero-title');
+                const catEl = slide.querySelector('.badge-cat');
+                const title = titleEl ? titleEl.innerText : `Slide ${i + 1}`;
+                const cat = catEl ? catEl.innerText : `Section ${i + 1}`;
+
+                const thumb = document.createElement('div');
+                thumb.className = `overview-thumb ${i === currentSlide ? 'current' : ''}`;
+                thumb.innerHTML = `
+                    <div class="overview-num">${String(i + 1).padStart(2, '0')} • ${cat}</div>
+                    <div class="overview-title">${title}</div>
+                `;
+                thumb.addEventListener('click', () => {
+                    updateSlide(i);
+                    modalOverview.classList.remove('active');
+                });
+                overviewGrid.appendChild(thumb);
+            });
+        }
+
+        function toggleOverview() {
+            populateOverview();
+            modalOverview.classList.toggle('active');
+        }
+
+        overviewBtn.addEventListener('click', toggleOverview);
+        closeOverviewBtn.addEventListener('click', () => modalOverview.classList.remove('active'));
+
+        // Fullscreen Toggle
+        function toggleFullScreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(() => { });
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+        fsBtn.addEventListener('click', toggleFullScreen);
+
+        // Laser Pointer
+        function toggleLaser() {
+            isLaserActive = !isLaserActive;
+            laserPointer.style.display = isLaserActive ? 'block' : 'none';
+            laserBtn.style.background = isLaserActive ? 'var(--accent-red)' : '';
+            laserBtn.style.color = isLaserActive ? '#ffffff' : '';
+        }
+        laserBtn.addEventListener('click', toggleLaser);
+
+        document.addEventListener('mousemove', (e) => {
+            if (isLaserActive) {
+                laserPointer.style.left = e.clientX + 'px';
+                laserPointer.style.top = e.clientY + 'px';
+            }
+        });
+
+        // Background Particles
+        const canvas = document.getElementById('bgCanvas');
+        const ctx = canvas.getContext('2d');
+        let particles = [];
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        class Particle {
+            constructor() {
+                this.x = Math.random() * canvas.width;
+                this.y = Math.random() * canvas.height;
+                this.size = Math.random() * 2 + 1;
+                this.speedX = (Math.random() - 0.5) * 0.4;
+                this.speedY = (Math.random() - 0.5) * 0.4;
+                this.color = Math.random() > 0.6 ? 'rgba(2, 132, 199, 0.25)' : 'rgba(234, 88, 12, 0.2)';
+            }
+            update() {
+                this.x += this.speedX;
+                this.y += this.speedY;
+                if (this.x < 0 || this.x > canvas.width) this.speedX *= -1;
+                if (this.y < 0 || this.y > canvas.height) this.speedY *= -1;
+            }
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        for (let i = 0; i < 45; i++) {
+            particles.push(new Particle());
+        }
+
+        function animateBg() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (let i = 0; i < particles.length; i++) {
+                particles[i].update();
+                particles[i].draw();
+                for (let j = i + 1; j < particles.length; j++) {
+                    const dx = particles[i].x - particles[j].x;
+                    const dy = particles[i].y - particles[j].y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < 120) {
+                        ctx.strokeStyle = `rgba(2, 132, 199, ${0.08 * (1 - dist / 120)})`;
+                        ctx.lineWidth = 0.8;
+                        ctx.beginPath();
+                        ctx.moveTo(particles[i].x, particles[i].y);
+                        ctx.lineTo(particles[j].x, particles[j].y);
+                        ctx.stroke();
+                    }
+                }
+            }
+            requestAnimationFrame(animateBg);
+        }
+        animateBg();
+
+        // Chart.js initialization
+        let ramChartInstance = null;
+        function initRamChart() {
+            if (ramChartInstance) return;
+            const ctxRam = document.getElementById('ramChart');
+            if (!ctxRam) return;
+
+            ramChartInstance = new Chart(ctxRam, {
+                type: 'doughnut',
+                data: {
+                    labels: ['OS Linux', 'PostGIS', 'OSRM C++', 'Redis', 'Go Backend', 'Dự phòng Free'],
+                    datasets: [{
+                        data: [500, 800, 400, 200, 40, 2060],
+                        backgroundColor: [
+                            '#64748b',
+                            '#7c3aed',
+                            '#ea580c',
+                            '#e11d48',
+                            '#16a34a',
+                            '#0284c7'
+                        ],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '70%',
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function (context) {
+                                    return ` ${context.label}: ${context.raw} MB`;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        updateSlide(0);
+    </script>
+</body>
+
+</html>
