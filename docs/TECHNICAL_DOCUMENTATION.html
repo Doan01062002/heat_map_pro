@@ -1,0 +1,2262 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tài Liệu Kỹ Thuật — Hệ Thống Bản Đồ Nhiệt</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+    @page {
+      size: A4;
+      margin: 18mm 15mm 18mm 15mm;
+      @bottom-right {
+        content: counter(page);
+        font-family: 'Inter', sans-serif;
+        font-size: 8.5pt;
+        color: #64748b;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      font-size: 10pt;
+      line-height: 1.6;
+      color: #1e293b;
+      background-color: #ffffff;
+      margin: 0;
+      padding: 0;
+    }
+
+    /* Document Title H1 */
+    h1:first-of-type {
+      font-size: 18pt;
+      font-weight: 800;
+      color: #0f172a;
+      border-bottom: 2.5px solid #2563eb;
+      padding-bottom: 8px;
+      margin-top: 0;
+      margin-bottom: 12px;
+      line-height: 1.35;
+    }
+
+    /* Metadata Blockquote exactly like Markdown */
+    blockquote {
+      margin: 10px 0 18px 0;
+      padding: 10px 16px;
+      background-color: #f8fafc;
+      border-left: 4px solid #3b82f6;
+      color: #334155;
+      font-size: 9.5pt;
+      line-height: 1.6;
+      border-radius: 0 6px 6px 0;
+    }
+
+    blockquote p {
+      margin: 3px 0;
+    }
+
+    /* Section Headings */
+    h1 {
+      font-size: 15pt;
+      font-weight: 700;
+      color: #0f172a;
+      border-bottom: 1.5px solid #e2e8f0;
+      padding-bottom: 6px;
+      margin-top: 26px;
+      margin-bottom: 12px;
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+
+    h2 {
+      font-size: 12.5pt;
+      font-weight: 700;
+      color: #0f172a;
+      margin-top: 22px;
+      margin-bottom: 10px;
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+
+    h3 {
+      font-size: 11pt;
+      font-weight: 600;
+      color: #1e293b;
+      margin-top: 16px;
+      margin-bottom: 8px;
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+
+    h4 {
+      font-size: 10pt;
+      font-weight: 600;
+      color: #334155;
+      margin-top: 12px;
+      margin-bottom: 6px;
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+
+    p {
+      margin: 6px 0 10px 0;
+      text-align: justify;
+    }
+
+    hr {
+      border: 0;
+      height: 1px;
+      background: #e2e8f0;
+      margin: 18px 0;
+    }
+
+    /* Lists */
+    ul, ol {
+      margin: 6px 0 12px 0;
+      padding-left: 24px;
+    }
+
+    li {
+      margin-bottom: 3px;
+    }
+
+    /* Links */
+    a {
+      color: #2563eb;
+      text-decoration: none;
+    }
+
+    strong {
+      color: #0f172a;
+      font-weight: 600;
+    }
+
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 16px 0;
+      font-size: 8.8pt;
+      page-break-inside: avoid;
+      break-inside: avoid;
+      background: #ffffff;
+    }
+
+    th {
+      background-color: #f1f5f9;
+      color: #0f172a;
+      font-weight: 700;
+      text-align: left;
+      padding: 7px 10px;
+      border: 1px solid #cbd5e1;
+    }
+
+    td {
+      padding: 6px 10px;
+      border: 1px solid #e2e8f0;
+      color: #334155;
+      vertical-align: top;
+    }
+
+    tr:nth-child(even) td {
+      background-color: #f8fafc;
+    }
+
+    /* Inline Code */
+    code {
+      font-family: 'Consolas', 'Courier New', 'JetBrains Mono', monospace;
+      font-size: 8.8pt;
+      background-color: #f1f5f9;
+      color: #0369a1;
+      padding: 1.5px 4.5px;
+      border-radius: 4px;
+      border: 1px solid #e2e8f0;
+    }
+
+    /* Code Blocks & ASCII Diagrams: Perfectly aligned, Clean Light Background, NO Black Box */
+    pre {
+      background-color: #f8fafc !important;
+      color: #0f172a !important;
+      border: 1.2px solid #cbd5e1 !important;
+      border-radius: 6px;
+      padding: 12px 14px;
+      margin: 12px 0 16px 0;
+      overflow-x: auto;
+      page-break-inside: avoid;
+      break-inside: avoid;
+      
+      /* Perfect monospace alignment for ASCII diagrams */
+      font-family: 'Consolas', 'Courier New', 'Lucida Console', monospace !important;
+      font-size: 7.6pt !important;
+      line-height: 1.28 !important;
+      letter-spacing: 0 !important;
+      white-space: pre !important;
+      tab-size: 4;
+      font-variant-east-asian: normal;
+    }
+
+    pre code {
+      background: transparent !important;
+      color: inherit !important;
+      padding: 0 !important;
+      border: none !important;
+      font-size: inherit !important;
+      font-family: inherit !important;
+      line-height: inherit !important;
+      letter-spacing: inherit !important;
+      white-space: pre !important;
+    }
+
+    @media print {
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      pre, table, blockquote {
+        page-break-inside: avoid;
+        break-inside: avoid;
+      }
+      h1, h2, h3, h4 {
+        page-break-after: avoid;
+        break-after: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>Tài Liệu Kỹ Thuật — Hệ Thống Bản Đồ Nhiệt Phát Hiện Tài Xế Đi Chệch Tuyến Đường Thời Gian Thực</h1>
+<blockquote>
+<p><strong>Dự án:</strong> heat_map_pro<br><strong>Phiên bản:</strong> 1.0.0<br><strong>Cập nhật lần cuối:</strong> 23/08/2026<br><strong>Người thực hiện:</strong> Nguyễn Văn Đoan</p>
+</blockquote>
+<hr>
+<h2>Mục Lục</h2>
+<ol>
+<li><a href="#1-t%E1%BB%95ng-quan-d%E1%BB%B1-%C3%A1n">Tổng Quan Dự Án</a></li>
+<li><a href="#2-ki%E1%BA%BFn-tr%C3%BAc-h%E1%BB%87-th%E1%BB%91ng">Kiến Trúc Hệ Thống</a></li>
+<li><a href="#3-c%C3%B4ng-ngh%E1%BB%87-s%E1%BB%AD-d%E1%BB%A5ng">Công Nghệ Sử Dụng</a></li>
+<li><a href="#4-c%E1%BA%A5u-tr%C3%BAc-th%C6%B0-m%E1%BB%A5c">Cấu Trúc Thư Mục</a></li>
+<li><a href="#5-backend--d%E1%BB%8Bch-v%E1%BB%A5-go">Backend — Dịch Vụ Go</a><ul>
+<li>5.1 <a href="#51-%C4%91i%E1%BB%83m-kh%E1%BB%9Fi-t%E1%BA%A1o--k%E1%BA%BFt-n%E1%BB%91i-ph%E1%BB%A5-thu%E1%BB%99c">Điểm Khởi Tạo &amp; Kết Nối Phụ Thuộc</a></li>
+<li>5.2 <a href="#52-h%E1%BB%87-th%E1%BB%91ng-c%E1%BA%A5u-h%C3%ACnh">Hệ Thống Cấu Hình</a></li>
+<li>5.3 <a href="#53-pipeline-ti%E1%BA%BFp-nh%E1%BA%ADn-d%E1%BB%AF-li%E1%BB%87u-gps">Pipeline Tiếp Nhận Dữ Liệu GPS</a></li>
+<li>5.4 <a href="#54-l%E1%BB%8Dc-hai-giai-%C4%91o%E1%BA%A1n">Lọc Hai Giai Đoạn</a></li>
+<li>5.5 <a href="#55-ch%E1%BB%89-m%E1%BB%A5c-kh%C3%B4ng-gian-l%C6%B0%E1%BB%9Bi-h3">Chỉ Mục Không Gian (Lưới H3)</a></li>
+<li>5.6 <a href="#56-b%E1%BB%99-t%E1%BB%95ng-h%E1%BB%A3p-kh%C3%B4ng-kh%C3%B3a-lock-free">Bộ Tổng Hợp Không Khóa (Lock-Free)</a></li>
+<li>5.7 <a href="#57-ph%C3%A1t-h%C3%A0nh-qua-redis">Phát Hành Qua Redis</a></li>
+<li>5.8 <a href="#58-l%C6%B0u-tr%E1%BB%AF-postgresql">Lưu Trữ PostgreSQL</a></li>
+<li>5.9 <a href="#59-hub-websocket-cho-qu%E1%BA%A3n-tr%E1%BB%8B-vi%C3%AAn">Hub WebSocket Cho Quản Trị Viên</a></li>
+<li>5.10 <a href="#510-module-x%C3%A1c-th%E1%BB%B1c">Module Xác Thực</a></li>
+<li>5.11 <a href="#511-m%E1%BA%ABu-adapter-cho-persistence">Mẫu Adapter Cho Persistence</a></li>
+</ul>
+</li>
+<li><a href="#6-l%C6%B0%E1%BB%A3c-%C4%91%E1%BB%93-c%C6%A1-s%E1%BB%9F-d%E1%BB%AF-li%E1%BB%87u">Lược Đồ Cơ Sở Dữ Liệu</a></li>
+<li><a href="#7-tham-chi%E1%BA%BFu-rest-api">Tham Chiếu REST API</a></li>
+<li><a href="#8-giao-th%E1%BB%A9c-websocket">Giao Thức WebSocket</a></li>
+<li><a href="#9-l%C6%B0%E1%BB%A3c-%C4%91%E1%BB%93-protobuf">Lược Đồ Protobuf</a></li>
+<li><a href="#10-frontend--b%E1%BA%A3ng-%C4%91i%E1%BB%81u-khi%E1%BB%83n-qu%E1%BA%A3n-tr%E1%BB%8B">Frontend — Bảng Điều Khiển Quản Trị</a></li>
+<li><a href="#11-frontend--tr%C3%ACnh-m%C3%B4-ph%E1%BB%8Fng-t%C3%A0i-x%E1%BA%BF">Frontend — Trình Mô Phỏng Tài Xế</a></li>
+<li><a href="#12-d%E1%BB%8Bch-v%E1%BB%A5-ai-agent">Dịch Vụ AI Agent</a></li>
+<li><a href="#13-h%E1%BA%A1-t%E1%BA%A7ng--tri%E1%BB%83n-khai">Hạ Tầng &amp; Triển Khai</a></li>
+<li><a href="#14-r%C3%A0ng-bu%E1%BB%99c-hi%E1%BB%87u-n%C4%83ng--t%E1%BB%91i-%C6%B0u-h%C3%B3a">Ràng Buộc Hiệu Năng &amp; Tối Ưu Hóa</a></li>
+<li><a href="#15-bi%E1%BA%BFn-m%C3%B4i-tr%C6%B0%E1%BB%9Dng">Biến Môi Trường</a></li>
+<li><a href="#16-quy-tr%C3%ACnh-ph%C3%A1t-tri%E1%BB%83n">Quy Trình Phát Triển</a></li>
+<li><a href="#17-chi%E1%BA%BFn-l%C6%B0%E1%BB%A3c-ki%E1%BB%83m-th%E1%BB%AD">Chiến Lược Kiểm Thử</a></li>
+</ol>
+<hr>
+<h2>1. Tổng Quan Dự Án</h2>
+<p><strong>Hệ Thống Bản Đồ Nhiệt Phát Hiện Tài Xế Đi Chệch Tuyến Đường Thời Gian Thực</strong> (Real-Time Driver Deviation Heatmap) là một hệ thống phát hiện, tổng hợp và trực quan hóa các trường hợp tài xế taxi/xe công nghệ đi lệch khỏi tuyến đường đã lên kế hoạch. Hệ thống hoạt động ở hai chế độ:</p>
+<ul>
+<li><strong>Chế độ thời gian thực (Live):</strong> Các tài xế mô phỏng gửi dữ liệu GPS qua WebSocket → backend lọc, đánh chỉ mục không gian, và phát sự kiện lệch tuyến đến bảng điều khiển quản trị trong vòng 1 giây.</li>
+<li><strong>Chế độ lịch sử (History):</strong> Bảng điều khiển truy vấn PostgreSQL để lấy các sự kiện lệch tuyến đã lưu trữ và hiển thị bản đồ nhiệt H3 hexagon tương tác ở nhiều mức zoom (resolution 4–14).</li>
+</ul>
+<h3>Các Trường Hợp Sử Dụng Chính</h3>
+<table>
+<thead>
+<tr>
+<th>Trường hợp</th>
+<th>Tác nhân</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Tiếp nhận GPS</td>
+<td>Trình mô phỏng tài xế</td>
+<td>Gửi các lô điểm GPS mỗi 3 giây qua WebSocket</td>
+</tr>
+<tr>
+<td>Phát hiện lệch tuyến</td>
+<td>Pipeline Backend</td>
+<td>Lọc GPS qua hộp bao → khớp bản đồ OSRM → kiểm tra ngưỡng</td>
+</tr>
+<tr>
+<td>Bản đồ nhiệt thời gian thực</td>
+<td>Bảng điều khiển quản trị</td>
+<td>Hiển thị ô lệch tuyến cập nhật mỗi 1 giây qua WebSocket</td>
+</tr>
+<tr>
+<td>Phân tích lịch sử</td>
+<td>Bảng điều khiển quản trị</td>
+<td>Truy vấn hơn 386k sự kiện lệch tuyến với H3 resolution thích ứng (4–14)</td>
+</tr>
+<tr>
+<td>Điều tra chuyến đi</td>
+<td>Quản trị + AI Agent</td>
+<td>Click vào ô H3 → AI agent thu thập thời tiết, giao thông, hồ sơ tài xế và đưa ra chẩn đoán có cơ sở</td>
+</tr>
+</tbody></table>
+<h3>Bộ Dữ Liệu</h3>
+<p>Hệ thống được phát triển và kiểm thử trên <strong>bộ dữ liệu GPS Taxi Porto</strong> (<code>train.csv</code>, ~1.9 GB):</p>
+<ul>
+<li><strong>~386.000</strong> sự kiện lệch tuyến lưu trong PostgreSQL</li>
+<li><strong>~9.944</strong> chuyến đi duy nhất</li>
+<li><strong>225</strong> tài xế duy nhất</li>
+<li>Phạm vi địa lý: <strong>Porto, Bồ Đào Nha</strong> (vĩ độ ~41.14–41.18, kinh độ ~-8.65–-8.57)</li>
+</ul>
+<hr>
+<h2>2. Kiến Trúc Hệ Thống</h2>
+<pre><code>┌──────────────────────────────────────────────────────────────────────────────┐
+│                         Nginx Reverse Proxy (:80)                           │
+│   /api/* → Backend    /ws/* → Backend    /admin → SPA    /simulator → SPA   │
+└─────────────────────────────────┬────────────────────────────────────────────┘
+                                  │
+                    ┌─────────────▼──────────────┐
+                    │     Go Backend (:8080)      │
+                    │                             │
+                    │  ┌─────────────────────┐    │
+                    │  │  Bộ Tiếp Nhận       │    │ ◄── WS /ws/driver (lô GPS)
+                    │  │  (WebSocket server) │    │
+                    │  └────────┬────────────┘    │
+                    │           │                  │
+                    │  ┌────────▼────────────┐    │
+                    │  │  Pipeline Lọc       │    │
+                    │  │  1. Hộp bao (BBox)  │    │
+                    │  │  2. OSRM /nearest   │    │
+                    │  │  3. Kiểm tra ngưỡng  │   │
+                    │  └────────┬────────────┘    │
+                    │           │                  │
+                    │     ┌─────▼──────┐          │
+                    │     │ Chỉ mục    │          │
+                    │     │ không gian  │          │
+                    │     │ H3 Indexer │          │
+                    │     └─────┬──────┘          │
+                    │           │                  │
+                    │   ┌───────▼────────┐        │
+                    │   │  Bộ Tổng Hợp   │        │
+                    │   │  Không Khóa    │        │
+                    │   │ (sync.Map +    │        │
+                    │   │  atomic ops)   │        │
+                    │   └───┬───────┬────┘        │
+                    │       │       │              │
+                    │  ┌────▼──┐ ┌──▼───────────┐ │
+                    │  │ Redis │ │  PostgreSQL   │ │
+                    │  │ Pub   │ │  Ghi theo lô  │ │
+                    │  │(1 giây)│ │  (30 giây)   │ │
+                    │  └───┬───┘ └───────────────┘ │
+                    │      │                       │
+                    │  ┌───▼──────────────┐        │
+                    │  │ Hub WS Quản Trị  │        │──► WS /ws/admin (cập nhật bản đồ nhiệt)
+                    │  │ (Redis Sub →     │        │
+                    │  │  phát sóng)      │        │
+                    │  └──────────────────┘        │
+                    │                              │
+                    │  Các API REST:                │
+                    │  /api/h3-aggregate            │ ◄── Bảng điều khiển (ô H3 hex)
+                    │  /api/stats-summary           │ ◄── Thống kê tổng quan
+                    │  /api/trips-summary           │ ◄── Danh sách chuyến đi phân trang
+                    │  /api/points                  │ ◄── Điểm GPS thô
+                    │  /api/ai/investigate           │ ──► AI Agent (:8090)
+                    └──────────────────────────────┘
+
+Dịch vụ bên ngoài:
+  ┌──────────────┐   ┌─────────────────┐   ┌──────────────┐
+  │ OSRM (:5000) │   │ PostgreSQL+     │   │ Redis (:6379)│
+  │ (Khớp bản đồ)│   │ PostGIS (:5432) │   │ (Pub/Sub)    │
+  └──────────────┘   └─────────────────┘   └──────────────┘
+</code></pre>
+<h3>Tóm Tắt Luồng Dữ Liệu</h3>
+<ol>
+<li><strong>Trình mô phỏng tài xế</strong> → WebSocket (<code>/ws/driver</code>) → <strong>Bộ Tiếp Nhận</strong></li>
+<li><strong>Bộ Tiếp Nhận</strong> → Lọc hộp bao → OSRM <code>/nearest</code> → Kiểm tra ngưỡng</li>
+<li>Xác nhận lệch tuyến → <strong>Chỉ mục H3</strong> (tính toán ô O(1)) → <strong>Bộ Tổng Hợp</strong> (tăng nguyên tử)</li>
+<li><strong>Redis Publisher</strong> (mỗi 1 giây): chụp nhanh bộ tổng hợp → phát JSON lên kênh <code>heatmap:updates</code></li>
+<li><strong>Hub WebSocket Quản Trị</strong>: đăng ký kênh Redis → phát sóng đến tất cả client quản trị đang kết nối</li>
+<li><strong>PostgreSQL Writer</strong> (mỗi 30 giây): chèn hàng loạt các sự kiện đệm vào bảng <code>deviation_events</code></li>
+<li><strong>Bảng điều khiển quản trị</strong> (REST): truy vấn <code>/api/h3-aggregate</code> với resolution + bbox viewport → server tính toán ô H3 → trả về polygon sẵn sàng vẽ</li>
+</ol>
+<hr>
+<h2>3. Công Nghệ Sử Dụng</h2>
+<table>
+<thead>
+<tr>
+<th>Tầng</th>
+<th>Công nghệ</th>
+<th>Phiên bản</th>
+<th>Mục đích</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Backend</strong></td>
+<td>Go</td>
+<td>1.22+</td>
+<td>HTTP server, WebSocket, pipeline xử lý dữ liệu</td>
+</tr>
+<tr>
+<td><strong>Chỉ mục không gian</strong></td>
+<td>Lưới H3 tùy chỉnh</td>
+<td>—</td>
+<td>Chỉ mục ô lưới thuần Go (không cần CGO khi dev)</td>
+</tr>
+<tr>
+<td><strong>Cơ sở dữ liệu</strong></td>
+<td>PostgreSQL + PostGIS</td>
+<td>16 + 3.4</td>
+<td>Lưu trữ bền vững cho sự kiện lệch tuyến, chuyến đi, tài xế</td>
+</tr>
+<tr>
+<td><strong>Hàng đợi tin nhắn</strong></td>
+<td>Redis</td>
+<td>7</td>
+<td>Pub/Sub cho cập nhật bản đồ nhiệt thời gian thực (1 giây/lần)</td>
+</tr>
+<tr>
+<td><strong>Khớp bản đồ</strong></td>
+<td>OSRM</td>
+<td>mới nhất</td>
+<td>Bắt dính điểm GPS vào mạng lưới đường qua <code>/nearest</code> API</td>
+</tr>
+<tr>
+<td><strong>Frontend Quản Trị</strong></td>
+<td>React 18 + Vite</td>
+<td>—</td>
+<td>Bảng điều khiển bản đồ nhiệt tương tác với MapLibre GL JS</td>
+</tr>
+<tr>
+<td><strong>Frontend Mô Phỏng</strong></td>
+<td>React 18 + Vite</td>
+<td>—</td>
+<td>Mô phỏng GPS tài xế với WebSocket streaming</td>
+</tr>
+<tr>
+<td><strong>Hiển thị bản đồ</strong></td>
+<td>MapLibre GL JS</td>
+<td>—</td>
+<td>Trình hiển thị bản đồ mã nguồn mở (không cần API key)</td>
+</tr>
+<tr>
+<td><strong>AI Agent</strong></td>
+<td>Python + FastAPI</td>
+<td>—</td>
+<td>Công cụ điều tra theo ngữ cảnh (mẫu ReAct)</td>
+</tr>
+<tr>
+<td><strong>Mô hình ngôn ngữ lớn</strong></td>
+<td>Groq (LLaMA 3.3 70B) / Gemini</td>
+<td>—</td>
+<td>Tạo chẩn đoán có căn cứ</td>
+</tr>
+<tr>
+<td><strong>Reverse Proxy</strong></td>
+<td>Nginx</td>
+<td>alpine</td>
+<td>Điểm vào duy nhất, phục vụ file tĩnh, nâng cấp WebSocket</td>
+</tr>
+<tr>
+<td><strong>Tuần tự hóa</strong></td>
+<td>Protocol Buffers v3</td>
+<td>—</td>
+<td>Định nghĩa lược đồ (nguồn chính xác duy nhất cho tin nhắn)</td>
+</tr>
+<tr>
+<td><strong>Container hóa</strong></td>
+<td>Docker Compose</td>
+<td>—</td>
+<td>Điều phối toàn bộ stack với health check</td>
+</tr>
+</tbody></table>
+<h3>Thư Viện Chính</h3>
+<p><strong>Backend Go:</strong></p>
+<ul>
+<li><code>github.com/gorilla/websocket</code> — Server WebSocket</li>
+<li><code>github.com/jackc/pgx/v5</code> — Driver PostgreSQL với connection pooling</li>
+<li><code>github.com/redis/go-redis/v9</code> — Client Redis</li>
+<li><code>log/slog</code> — Ghi log có cấu trúc JSON (thư viện chuẩn)</li>
+<li><code>sync.Map</code> + <code>sync/atomic</code> — Cơ chế đồng thời không khóa</li>
+</ul>
+<p><strong>Frontend (Quản Trị + Mô Phỏng):</strong></p>
+<ul>
+<li><code>maplibre-gl</code> — Hiển thị bản đồ với tile CARTO dark-matter</li>
+<li><code>protobufjs</code> — Giải mã Protobuf (dự kiến, hiện tại dùng JSON)</li>
+</ul>
+<hr>
+<h2>4. Cấu Trúc Thư Mục</h2>
+<pre><code>heat_map_pro/
+├── .agents/                     # Quy tắc cho AI agent (AGENTS.md)
+├── .env                         # Biến môi trường (không đưa lên git)
+├── .env.example                 # Mẫu biến môi trường có chú thích
+├── Makefile                     # Lệnh build/dev/test gốc
+├── package.json                 # Script khởi động monorepo (concurrently)
+│
+├── proto/
+│   └── heatmap/v1/
+│       └── messages.proto       # ⭐ Nguồn chính xác duy nhất cho mọi tin nhắn
+│
+├── backend/
+│   ├── Dockerfile               # Build Go đa giai đoạn (alpine)
+│   ├── go.mod / go.sum          # Go module (1.22+)
+│   ├── cmd/
+│   │   └── server/
+│   │       └── main.go          # ⭐ Điểm khởi tạo: kết nối phụ thuộc &amp; khởi động
+│   ├── gen/
+│   │   └── heatmap/v1/          # Code Go được tạo tự động từ Protobuf
+│   └── internal/
+│       ├── config/              # Struct cấu hình &amp; đọc biến môi trường
+│       ├── ingestion/           # Bộ xử lý WebSocket + pipeline lọc
+│       ├── filter/              # Hộp bao + client OSRM
+│       ├── spatial/             # Chỉ mục lưới H3 (thuần Go)
+│       ├── aggregator/          # Bộ đếm không khóa (sync.Map + atomic)
+│       ├── publisher/           # Phát hành Redis + flush theo lô
+│       ├── persistence/         # Ghi PostgreSQL + các handler REST API
+│       ├── websocket/           # Hub WebSocket quản trị (Redis sub → phát sóng)
+│       └── auth/                # Xác thực tài xế (đăng ký/đăng nhập/xem hồ sơ)
+│
+├── frontend/
+│   ├── admin/                   # Bảng Điều Khiển Quản Trị (React + Vite)
+│   │   └── src/
+│   │       ├── App.jsx          # Gốc: chuyển chế độ, tải dữ liệu, chọn chuyến đi
+│   │       ├── components/
+│   │       │   ├── MapContainer.jsx       # Bọc bản đồ MapLibre GL
+│   │       │   ├── HeatmapLayer.jsx       # ⭐ Vẽ H3 hex, đùn 3D, logic fetch
+│   │       │   ├── FilterPanel.jsx        # Bộ lọc ngày/tài xế/chuyến đi + điều tra AI
+│   │       │   ├── StatsOverlay.jsx       # Lớp phủ thống kê live/lịch sử
+│   │       │   ├── DriverList.jsx         # Danh sách tài xế với lựa chọn
+│   │       │   ├── HourlyAnalyticsChart.jsx # Biểu đồ phân tích né tránh 24 giờ
+│   │       │   └── ToastNotification.jsx  # Thông báo chuyến đi mới
+│   │       ├── hooks/
+│   │       │   ├── useHeatmapStream.js    # Hook WebSocket cho bản đồ nhiệt live
+│   │       │   └── useProgressiveData.js  # ⭐ Tải dữ liệu tiến triển 3 pha
+│   │       ├── utils/
+│   │       │   └── osrmRouting.js         # Khớp tuyến OSRM &amp; chồng lấp H3
+│   │       └── workers/
+│   │           └── h3Worker.js            # Web Worker cho tính toán H3
+│   │
+│   └── simulator/               # Trình Mô Phỏng Tài Xế (React + Vite)
+│       └── src/
+│           ├── App.jsx          # Mô phỏng GPS, vẽ tuyến, lưu chuyến đi
+│           ├── components/      # ControlPanel, MapView, StatsBar, AuthModal
+│           ├── hooks/
+│           │   └── useWebSocket.js  # Hook WebSocket dùng chung
+│           ├── lib/
+│           │   └── routeService.js  # Lấy tuyến đường OSRM
+│           └── workers/
+│               └── simulationWorker.js  # Web Worker cho tạo GPS
+│
+├── ai/
+│   └── agent/                   # Dịch Vụ AI Agent (Python)
+│       ├── Dockerfile           # Build Python
+│       ├── main.py              # Server FastAPI (:8090)
+│       ├── models.py            # Mô hình dữ liệu Pydantic
+│       ├── react_engine.py      # Công cụ điều tra ReAct
+│       ├── llm_client.py        # Tích hợp LLM (Groq/Gemini)
+│       └── tools/               # Các hàm công cụ
+│           ├── weather.py       # API thời tiết (Open-Meteo)
+│           ├── reverse_geocode.py  # Chuyển tọa độ ngược (Nominatim)
+│           ├── news_search.py   # Tìm kiếm sự cố
+│           ├── db_telemetry.py  # Truy vấn telemetry PostgreSQL
+│           ├── osrm_alternatives.py  # Phân tích tuyến thay thế OSRM
+│           ├── driver_profile.py  # Lịch sử tuân thủ tài xế
+│           └── traffic_speed_ratio.py  # Phân tích tốc độ giao thông
+│
+├── infra/
+│   ├── docker-compose.yml       # ⭐ Stack production đầy đủ (7 dịch vụ)
+│   ├── docker-compose.dev.yml   # Ghi đè cho phát triển
+│   ├── nginx/
+│   │   └── nginx.conf           # Cấu hình reverse proxy
+│   ├── osrm/                    # Dữ liệu bản đồ OSRM (không đưa lên git)
+│   └── postgres/
+│       ├── init.sql             # ⭐ Lược đồ CSDL + chỉ mục + hàm
+│       └── 02-ai-columns.sql   # Bổ sung cột cho AI
+│
+└── scripts/
+    └── download-map.sh          # Script tải dữ liệu bản đồ OSRM
+</code></pre>
+<hr>
+<h2>5. Backend — Dịch Vụ Go</h2>
+<h3>5.1 Điểm Khởi Tạo &amp; Kết Nối Phụ Thuộc</h3>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/backend/cmd/server/main.go"><code>main.go</code></a></p>
+<p>Điểm khởi tạo tuân theo mẫu <strong>composition root</strong> — đây là file DUY NHẤT import tất cả package nội bộ và kết nối chúng lại. Không có logic nghiệp vụ nào ở đây.</p>
+<p><strong>Trình tự khởi động:</strong></p>
+<ol>
+<li>Tải cấu hình từ biến môi trường</li>
+<li>Khởi tạo logger có cấu trúc JSON (<code>log/slog</code>)</li>
+<li>Tạo context gốc với cancel (để tắt máy chủ an toàn)</li>
+<li>Khởi tạo tất cả phụ thuộc theo thứ tự:<ul>
+<li><code>spatial.NewH3Indexer(resolution)</code> — Lưới H3</li>
+<li><code>aggregator.New()</code> — Bộ đếm không khóa</li>
+<li><code>filter.NewOSRMClient(url, timeout)</code> — Client HTTP OSRM</li>
+<li><code>filter.NewBoundingBoxFilter(bufferMeters)</code> — Hộp bao trong bộ nhớ</li>
+<li><code>publisher.NewRedisPublisher(ctx, cfg)</code> — Kết nối Redis</li>
+<li><code>persistence.NewPostgresWriter(ctx, cfg)</code> — Pool PostgreSQL</li>
+<li><code>websocket.NewHub(ctx, cfg)</code> — Hub WebSocket quản trị</li>
+<li><code>persistence.NewAdapter(pgWriter)</code> — Cầu nối adapter</li>
+<li><code>ingestion.NewHandler(...)</code> — Pipeline tiếp nhận</li>
+<li><code>auth.NewRepository/NewHandler</code> — Xác thực</li>
+</ul>
+</li>
+<li>Kết nối phụ thuộc chéo (bộ đếm tài xế, callback lưu chuyến đi)</li>
+<li>Khởi động 3 goroutine nền:<ul>
+<li>Vòng lặp flush Redis (mỗi 1 giây)</li>
+<li>Vòng lặp flush PostgreSQL (mỗi 30 giây)</li>
+<li>Đăng ký WebSocket subscriber (Redis → phát sóng quản trị)</li>
+</ul>
+</li>
+<li>Đăng ký các route HTTP trên <code>http.ServeMux</code></li>
+<li>Khởi động HTTP server với middleware CORS + Gzip</li>
+<li>Chờ SIGINT/SIGTERM → tắt máy chủ an toàn</li>
+</ol>
+<p><strong>Chuỗi middleware:</strong> <code>corsHandler → gzipHandler → mux</code></p>
+<ul>
+<li>CORS: <code>Access-Control-Allow-Origin: *</code> (mở cho demo)</li>
+<li>Gzip: <code>gzip.BestSpeed</code> cho tất cả response không phải WebSocket (~80% nén)</li>
+<li>Các đường WebSocket (<code>/ws/*</code>) bỏ qua gzip để tránh xung đột upgrade</li>
+</ul>
+<p><strong>Cấu hình HTTP Server:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Tham số</th>
+<th>Giá trị</th>
+<th>Lý do</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>ReadTimeout</code></td>
+<td>15 giây</td>
+<td>Chống tấn công client chậm</td>
+</tr>
+<tr>
+<td><code>WriteTimeout</code></td>
+<td>30 giây</td>
+<td>H3 aggregate quét 386k dòng</td>
+</tr>
+<tr>
+<td><code>IdleTimeout</code></td>
+<td>60 giây</td>
+<td>Keep-alive cho dashboard polling</td>
+</tr>
+</tbody></table>
+<hr>
+<h3>5.2 Hệ Thống Cấu Hình</h3>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/backend/internal/config/config.go"><code>config.go</code></a></p>
+<p>Mọi cấu hình được tải từ biến môi trường với giá trị mặc định hợp lý. Trình đọc file <code>.env</code> tùy chỉnh hỗ trợ định dạng dotenv (không phụ thuộc thư viện ngoài).</p>
+<p><strong>Các trường trong struct Config:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Trường</th>
+<th>Biến môi trường</th>
+<th>Mặc định</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>AppEnv</code></td>
+<td><code>APP_ENV</code></td>
+<td><code>development</code></td>
+<td>Chế độ môi trường</td>
+</tr>
+<tr>
+<td><code>LogLevel</code></td>
+<td><code>LOG_LEVEL</code></td>
+<td><code>debug</code></td>
+<td>Mức độ chi tiết log</td>
+</tr>
+<tr>
+<td><code>BackendPort</code></td>
+<td><code>BACKEND_PORT</code></td>
+<td><code>8080</code></td>
+<td>Cổng lắng nghe HTTP/WS</td>
+</tr>
+<tr>
+<td><code>OSRMURL</code></td>
+<td><code>OSRM_URL</code></td>
+<td><code>http://127.0.0.1:5000</code></td>
+<td>URL gốc OSRM</td>
+</tr>
+<tr>
+<td><code>OSRMMatchTimeoutMS</code></td>
+<td><code>OSRM_MATCH_TIMEOUT_MS</code></td>
+<td><code>500</code></td>
+<td>Timeout gọi OSRM (ms)</td>
+</tr>
+<tr>
+<td><code>RedisAddr</code></td>
+<td><code>REDIS_ADDR</code></td>
+<td><code>127.0.0.1:6379</code></td>
+<td>Redis host:port</td>
+</tr>
+<tr>
+<td><code>RedisChannel</code></td>
+<td><code>REDIS_CHANNEL</code></td>
+<td><code>heatmap:updates</code></td>
+<td>Tên kênh Pub/Sub</td>
+</tr>
+<tr>
+<td><code>PostgresHost</code></td>
+<td><code>POSTGRES_HOST</code></td>
+<td><code>127.0.0.1</code></td>
+<td>Host PostgreSQL</td>
+</tr>
+<tr>
+<td><code>PostgresPort</code></td>
+<td><code>POSTGRES_PORT</code></td>
+<td><code>5432</code></td>
+<td>Cổng PostgreSQL</td>
+</tr>
+<tr>
+<td><code>PostgresUser</code></td>
+<td><code>POSTGRES_USER</code></td>
+<td><code>heatmap</code></td>
+<td>Tên người dùng CSDL</td>
+</tr>
+<tr>
+<td><code>PostgresPassword</code></td>
+<td><code>POSTGRES_PASSWORD</code></td>
+<td><code>heatmap_secret_2024</code></td>
+<td>Mật khẩu CSDL</td>
+</tr>
+<tr>
+<td><code>PostgresDB</code></td>
+<td><code>POSTGRES_DB</code></td>
+<td><code>heatmap_db</code></td>
+<td>Tên cơ sở dữ liệu</td>
+</tr>
+<tr>
+<td><code>H3Resolution</code></td>
+<td><code>H3_RESOLUTION</code></td>
+<td><code>8</code></td>
+<td>Resolution H3 mặc định (chế độ thời gian thực)</td>
+</tr>
+<tr>
+<td><code>FlushIntervalRedisMS</code></td>
+<td><code>FLUSH_INTERVAL_REDIS_MS</code></td>
+<td><code>1000</code></td>
+<td>Chu kỳ flush Redis</td>
+</tr>
+<tr>
+<td><code>FlushIntervalPostgresS</code></td>
+<td><code>FLUSH_INTERVAL_POSTGRES_S</code></td>
+<td><code>30</code></td>
+<td>Chu kỳ flush PostgreSQL</td>
+</tr>
+<tr>
+<td><code>BBoxBufferMeters</code></td>
+<td><code>BBOX_BUFFER_METERS</code></td>
+<td><code>50</code></td>
+<td>Khoảng cách mở rộng hộp bao</td>
+</tr>
+<tr>
+<td><code>DeviationThresholdMeters</code></td>
+<td><code>DEVIATION_THRESHOLD_METERS</code></td>
+<td><code>50</code></td>
+<td>Ngưỡng tối thiểu để đánh dấu lệch tuyến</td>
+</tr>
+</tbody></table>
+<p><strong>Kiểm tra hợp lệ:</strong> H3 resolution (0–15), phạm vi cổng (1–65535).</p>
+<p><strong>Tạo DSN:</strong> <code>postgres://user:pass@host:port/db?sslmode=disable</code></p>
+<hr>
+<h3>5.3 Pipeline Tiếp Nhận Dữ Liệu GPS</h3>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/backend/internal/ingestion/handler.go"><code>ingestion/handler.go</code></a></p>
+<p>Bộ tiếp nhận quản lý các kết nối WebSocket từ trình mô phỏng tài xế và xử lý điểm GPS qua pipeline 6 giai đoạn.</p>
+<p><strong>Thiết kế interface-first:</strong> Tất cả phụ thuộc được định nghĩa dưới dạng interface trong file này (package người tiêu dùng), không phải trong package nhà cung cấp:</p>
+<pre><code class="language-go">type Filter interface {
+    IsInsideBBox(lat, lng float64, tripID string) bool
+    RegisterTrip(tripID string, waypoints []Waypoint) BoundingBox
+}
+
+type MapMatcher interface {
+    MatchAndDistance(ctx context.Context, lat, lng float64, tripWaypoints []Waypoint) (float64, error)
+}
+
+type SpatialIndexer interface {
+    LatLngToCell(lat, lng float64) string
+}
+
+type DeviationAggregator interface {
+    Increment(h3Index string)
+}
+
+type EventPersister interface {
+    BufferEvent(event DeviationEventData)
+}
+</code></pre>
+<p><strong>Pipeline xử lý GPS (mỗi điểm):</strong></p>
+<pre><code>Giai đoạn 1: Kiểm tra Hộp Bao (O(1), trong bộ nhớ)
+   │
+   ├── Nằm trong bbox → BỎ QUA (điểm nằm trên tuyến kế hoạch)
+   │
+   ▼
+Giai đoạn 2: Khớp Bản Đồ OSRM (HTTP, timeout 500ms)
+   │
+   ├── Lỗi → BỎ QUA với cảnh báo
+   │
+   ▼
+Giai đoạn 3: Kiểm tra Ngưỡng (khoảng cách ≤ 50m)
+   │
+   ├── Dưới ngưỡng → BỎ QUA (nhiễu GPS)
+   │
+   ▼
+Giai đoạn 4: Chỉ Mục Không Gian H3 (O(1), toán thuần)
+   │
+   ▼
+Giai đoạn 5: Tổng Hợp Nguyên Tử (LOCK XADD, không tranh chấp)
+   │
+   ▼
+Giai đoạn 6: Đệm cho PostgreSQL (ghi theo lô mỗi 30 giây)
+</code></pre>
+<p><strong>Định dạng tin nhắn:</strong> Hiện tại là JSON (<code>GPSBatch</code> từ lược đồ Protobuf), sẽ chuyển sang Protobuf nhị phân để tin nhắn nhỏ hơn ~10 lần trong production.</p>
+<p><strong>Theo dõi tài xế hoạt động:</strong> <code>sync.RWMutex</code> bảo vệ <code>map[string]bool</code>, truy cập qua <code>ActiveDriverCount()</code> cho endpoint <code>/api/health</code>.</p>
+<hr>
+<h3>5.4 Lọc Hai Giai Đoạn</h3>
+<h4>Giai đoạn 1: Lọc Trước Bằng Hộp Bao (Bounding Box)</h4>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/backend/internal/filter/bounding_box.go"><code>filter/bounding_box.go</code></a></p>
+<ul>
+<li>Kiểm tra chứa O(1): <code>lat ∈ [minLat, maxLat] ∧ lng ∈ [minLng, maxLng]</code></li>
+<li>Hộp bao được mở rộng thêm <code>BBOX_BUFFER_METERS</code> (mặc định 50m) theo mọi hướng</li>
+<li>Chuyển đổi mét sang độ: <code>1° vĩ ≈ 111.320m</code>, <code>1° kinh ≈ 111.320 × cos(vĩ) m</code></li>
+<li>An toàn luồng: <code>sync.RWMutex</code> bảo vệ map trip→bbox</li>
+</ul>
+<p><strong>Mục đích:</strong> Loại bỏ ~80% điểm GPS mà không cần gọi HTTP, giảm đáng kể tải OSRM.</p>
+<h4>Giai đoạn 2: Khớp Bản Đồ OSRM</h4>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/backend/internal/filter/osrm_client.go"><code>filter/osrm_client.go</code></a></p>
+<ul>
+<li>Gọi OSRM <code>/nearest/v1/driving/{lng},{lat}?number=1</code></li>
+<li>Trả về khoảng cách bắt dính (mét từ điểm GPS đến đường gần nhất)</li>
+<li>Nếu có waypoint chuyến đi, tính khoảng cách Haversine đến waypoint gần nhất</li>
+<li>Client HTTP: timeout 500ms, connection pooling (10 kết nối nhàn rỗi mỗi host)</li>
+<li>Công thức Haversine: <code>d = R × c</code>, trong đó <code>c = 2 × atan2(√a, √(1−a))</code> và <code>R = 6.371.000 m</code></li>
+</ul>
+<hr>
+<h3>5.5 Chỉ Mục Không Gian (Lưới H3)</h3>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/backend/internal/spatial/h3_indexer.go"><code>spatial/h3_indexer.go</code></a></p>
+<blockquote>
+<p><strong>Ghi chú triển khai:</strong> Đây là lưới geohash thuần Go (không phụ thuộc CGO). Trong production, thay thế bằng <code>uber/h3-go</code> để có chỉ mục hexagon H3 thực sự.</p>
+</blockquote>
+<p><strong>Tính toán ô:</strong> <code>LatLngToCell(lat, lng) → &quot;H{res}:{latGrid}:{lngGrid}&quot;</code></p>
+<pre><code class="language-go">latGrid = floor((lat + 90) / cellSizeDeg)
+lngGrid = floor((lng + 360°_đã_chuẩn_hóa) / cellSizeDeg)
+</code></pre>
+<p><strong>Bảng Resolution → Kích Thước Ô:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Resolution</th>
+<th>Kích thước ô (°)</th>
+<th>Đường kính xấp xỉ</th>
+<th>Trường hợp sử dụng</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>4</td>
+<td>0,1326</td>
+<td>~14,7 km</td>
+<td>Xem toàn quốc</td>
+</tr>
+<tr>
+<td>5</td>
+<td>0,0500</td>
+<td>~5,6 km</td>
+<td>Xem vùng</td>
+</tr>
+<tr>
+<td>6</td>
+<td>0,0189</td>
+<td>~2,1 km</td>
+<td>Xem thành phố</td>
+</tr>
+<tr>
+<td>7</td>
+<td>0,00713</td>
+<td>~793 m</td>
+<td>Xem quận</td>
+</tr>
+<tr>
+<td>8</td>
+<td>0,00414</td>
+<td>~460 m</td>
+<td><strong>Mặc định</strong> (thời gian thực)</td>
+</tr>
+<tr>
+<td>9</td>
+<td>0,00156</td>
+<td>~174 m</td>
+<td>Xem khu vực</td>
+</tr>
+<tr>
+<td>10</td>
+<td>0,000589</td>
+<td>~66 m</td>
+<td>Xem cấp khối</td>
+</tr>
+<tr>
+<td>11</td>
+<td>0,000222</td>
+<td>~25 m</td>
+<td>Xem cấp đường</td>
+</tr>
+<tr>
+<td>12</td>
+<td>0,0000838</td>
+<td>~9,3 m</td>
+<td>Xem ngã tư</td>
+</tr>
+<tr>
+<td>13</td>
+<td>0,0000316</td>
+<td>~3,5 m</td>
+<td>Xem cấp làn đường</td>
+</tr>
+<tr>
+<td>14</td>
+<td>0,0000119</td>
+<td>~1,3 m</td>
+<td>Chi tiết tối đa</td>
+</tr>
+</tbody></table>
+<p><strong>Các phương thức bổ sung:</strong></p>
+<ul>
+<li><code>CellToLatLng()</code> — ngược lại: chỉ mục ô → tọa độ tâm</li>
+<li><code>CellToBoundary()</code> — tạo đa giác hexagon 6 đỉnh (hướng đỉnh phẳng, co giãn kinh độ theo vĩ độ)</li>
+<li><code>CellSizeDeg()</code> — trả về kích thước ô để phía client vẽ hexagon</li>
+</ul>
+<hr>
+<h3>5.6 Bộ Tổng Hợp Không Khóa (Lock-Free)</h3>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/backend/internal/aggregator/lockfree.go"><code>aggregator/lockfree.go</code></a></p>
+<p>Bộ tổng hợp là <strong>đường nóng</strong> (hot path) của hệ thống — mọi lệch tuyến được xác nhận đều tăng bộ đếm ở đây. Nó phải xử lý ghi đồng thời từ nhiều goroutine WebSocket mà không bị tranh chấp khóa.</p>
+<p><strong>Cấu trúc dữ liệu:</strong> <code>sync.Map[string]*uint64</code></p>
+<p><strong>Các thao tác:</strong></p>
+<ul>
+<li><code>Increment(h3Index)</code>: <code>sync.Map.LoadOrStore()</code> + <code>atomic.AddUint64()</code> — biên dịch thành một lệnh CPU <code>LOCK XADD</code> duy nhất</li>
+<li><code>Snapshot()</code>: hoán đổi nguyên tử tất cả bộ đếm về 0 và trả về giá trị trước hoán đổi. Được gọi bởi vòng lặp flush Redis mỗi 1 giây. Không chặn: các goroutine khác tiếp tục tăng trong khi duyệt.</li>
+<li><code>TotalActive()</code>: đếm số ô có bộ đếm khác 0 (xấp xỉ, không nhất quán nguyên tử giữa các ô)</li>
+</ul>
+<p><strong>Quy tắc thiết kế:</strong> KHÔNG dùng <code>sync.Mutex</code> trong package này. Chỉ dùng <code>sync.Map</code> + thao tác <code>atomic</code>.</p>
+<hr>
+<h3>5.7 Phát Hành Qua Redis</h3>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/backend/internal/publisher/redis_pub.go"><code>publisher/redis_pub.go</code></a></p>
+<p><strong>Vòng lặp flush (mỗi 1 giây):</strong></p>
+<ol>
+<li>Chụp nhanh từ bộ tổng hợp (hoán đổi nguyên tử về 0)</li>
+<li>Bỏ qua nếu ảnh chụp rỗng (không có lệch tuyến trong 1 giây qua)</li>
+<li>Xây dựng <code>heatmapUpdateJSON</code> với các ô, timestamp, số tài xế, tổng lệch tuyến</li>
+<li><code>json.Marshal()</code> và <code>PUBLISH</code> lên kênh Redis <code>heatmap:updates</code></li>
+</ol>
+<p><strong>Định dạng JSON được phát hành:</strong></p>
+<pre><code class="language-json">{
+  &quot;cells&quot;: [
+    { &quot;h3_index&quot;: &quot;H8:2602:25773&quot;, &quot;intensity&quot;: 5, &quot;last_updated&quot;: 1724389200000 }
+  ],
+  &quot;server_timestamp&quot;: 1724389200000,
+  &quot;total_drivers&quot;: 12,
+  &quot;total_deviations&quot;: 47
+}
+</code></pre>
+<p><strong>Bổ sung:</strong> <code>PublishRaw()</code> phát hành payload JSON thô tùy ý (dùng cho sự kiện <code>new_trip</code>).</p>
+<hr>
+<h3>5.8 Lưu Trữ PostgreSQL</h3>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/backend/internal/persistence/postgres.go"><code>persistence/postgres.go</code></a> (1.444 dòng)</p>
+<p><strong>Pool kết nối:</strong> <code>pgxpool</code> với <code>MaxConns=5</code>, <code>MinConns=1</code>.</p>
+<p><strong>Bộ ghi theo lô:</strong></p>
+<ul>
+<li>Các sự kiện được đệm trong slice bảo vệ bởi <code>sync.Mutex</code> (dung lượng ban đầu: 1024)</li>
+<li>Vòng lặp flush chạy mỗi 30 giây</li>
+<li>Sử dụng <code>pgx.Batch</code> để chèn nhiều dòng hiệu quả</li>
+</ul>
+<p><strong>Các handler REST API được export từ package này:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Handler</th>
+<th>Route</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>HandleSaveTrip</code></td>
+<td><code>POST /api/trips</code></td>
+<td>Lưu chuyến đi từ trình mô phỏng</td>
+</tr>
+<tr>
+<td><code>HandleGetTrips</code></td>
+<td><code>GET /api/trips</code></td>
+<td>Lấy danh sách chuyến đi (lọc theo tài xế/giới hạn)</td>
+</tr>
+<tr>
+<td><code>HandleTripsSummaryQuery</code></td>
+<td><code>GET /api/trips-summary</code></td>
+<td>Tóm tắt chuyến đi phân trang (tổng hợp từ deviation_events)</td>
+</tr>
+<tr>
+<td><code>HandleStatsSummary</code></td>
+<td><code>GET /api/stats-summary</code></td>
+<td>Thống kê toàn bộ dataset (tức thì, không hardcode ngày)</td>
+</tr>
+<tr>
+<td><code>HandleHistoryQuery</code></td>
+<td><code>GET /api/history</code></td>
+<td>Dữ liệu bản đồ nhiệt lịch sử (dùng hàm <code>get_heatmap_for_period</code>)</td>
+</tr>
+<tr>
+<td><code>HandleDeviationsQuery</code></td>
+<td><code>GET /api/deviations</code></td>
+<td>Sự kiện lệch tuyến của tài xế</td>
+</tr>
+<tr>
+<td><code>HandlePointsQuery</code></td>
+<td><code>GET /api/points</code></td>
+<td>Điểm GPS thô cho hiển thị bản đồ nhiệt</td>
+</tr>
+<tr>
+<td><code>HandleTrajectoriesQuery</code></td>
+<td><code>GET /api/trajectories</code></td>
+<td>Quỹ đạo GPS mỗi chuyến đi dưới dạng GeoJSON LineString</td>
+</tr>
+<tr>
+<td><code>HandleRoadStatsQuery</code></td>
+<td><code>GET /api/road-stats</code></td>
+<td>Thống kê đoạn đường (nhãn tiếng Việt)</td>
+</tr>
+<tr>
+<td><code>HandleHourlyStatsQuery</code></td>
+<td><code>GET /api/hourly-stats</code></td>
+<td>Thống kê né tránh theo giờ cho biểu đồ 24 giờ</td>
+</tr>
+<tr>
+<td><code>HandleActualPathQuery</code></td>
+<td><code>GET /api/actual-path</code></td>
+<td>Ô H3 đường thực tế (đường tài xế chọn khi đi lệch)</td>
+</tr>
+<tr>
+<td><code>HandleH3Aggregate</code></td>
+<td><code>GET /api/h3-aggregate</code></td>
+<td><strong>Tổng hợp H3 phía server</strong> (xem phần tiếp)</td>
+</tr>
+</tbody></table>
+<h4>Tổng Hợp H3 Phía Server</h4>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/backend/internal/persistence/h3_aggregate.go"><code>persistence/h3_aggregate.go</code></a></p>
+<p>Đây là endpoint quan trọng nhất cho chế độ lịch sử của bảng điều khiển quản trị. Thay vì gửi 386k điểm GPS thô đến trình duyệt, nó:</p>
+<ol>
+<li>Truy vấn <code>deviation_events</code> với khoảng thời gian + bbox tùy chọn + bộ lọc tài xế</li>
+<li>Cho mỗi dòng, tính <code>LatLngToCell(lat, lng)</code> tại resolution yêu cầu</li>
+<li>Tổng hợp theo ô: count, unique_drivers, avoid_trips, total_trips, avg/max deviation</li>
+<li>Trả về JSON với tọa độ tâm ô + cell_size (frontend vẽ hexagon cục bộ)</li>
+</ol>
+<p><strong>Bộ nhớ đệm:</strong> <code>sync.Map</code> với TTL 60 giây, khóa bằng SHA-256 của tham số truy vấn (resolution, bbox làm tròn 2 chữ số, khoảng thời gian, driver_id). Cache HIT trả về trong &lt;1ms.</p>
+<p><strong>Định dạng phản hồi:</strong></p>
+<pre><code class="language-json">{
+  &quot;cells&quot;: [
+    {
+      &quot;cell&quot;: &quot;H12:1565078:4193174&quot;,
+      &quot;cell_size&quot;: 0.0000838,
+      &quot;center_lat&quot;: 41.153578,
+      &quot;center_lng&quot;: -8.610042,
+      &quot;count&quot;: 27,
+      &quot;unique_drivers&quot;: 24,
+      &quot;avoid_trips&quot;: 5,
+      &quot;total_trips&quot;: 18,
+      &quot;avg_dev&quot;: 125.3,
+      &quot;max_dev&quot;: 450.7,
+      &quot;height&quot;: 69,
+      &quot;ratio&quot;: 0.278
+    }
+  ],
+  &quot;total_cells&quot;: 31589,
+  &quot;resolution&quot;: 12,
+  &quot;total_points_processed&quot;: 183731
+}
+</code></pre>
+<hr>
+<h3>5.9 Hub WebSocket Cho Quản Trị Viên</h3>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/backend/internal/websocket/hub.go"><code>websocket/hub.go</code></a></p>
+<ul>
+<li>Quản lý tập hợp client WebSocket quản trị đang kết nối (<code>map[*websocket.Conn]bool</code>)</li>
+<li>Goroutine nền đăng ký kênh Redis <code>heatmap:updates</code></li>
+<li>Khi nhận tin nhắn Redis, phát sóng JSON thô đến TẤT CẢ client quản trị đang kết nối</li>
+<li>Map client an toàn luồng với <code>sync.RWMutex</code></li>
+<li>Nâng cấp: <code>gorilla/websocket.Upgrader</code> với <code>CheckOrigin: true</code> (chấp nhận mọi nguồn)</li>
+</ul>
+<hr>
+<h3>5.10 Module Xác Thực</h3>
+<p><strong>Thư mục:</strong> <code>backend/internal/auth/</code></p>
+<ul>
+<li><code>auth.go</code> — Struct <code>Repository</code>: truy vấn PostgreSQL cho CRUD tài xế</li>
+<li><code>handler.go</code> — Các handler HTTP:<ul>
+<li><code>POST /api/auth/register</code> — Tạo tài khoản tài xế (email, mật khẩu, tên, SĐT, xe)</li>
+<li><code>POST /api/auth/login</code> — Xác thực và trả về token JWT/session</li>
+<li><code>GET /api/auth/me</code> — Trả về hồ sơ tài xế hiện tại</li>
+</ul>
+</li>
+</ul>
+<p>Băm mật khẩu sử dụng <code>golang.org/x/crypto/bcrypt</code>.</p>
+<hr>
+<h3>5.11 Mẫu Adapter Cho Persistence</h3>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/backend/internal/persistence/adapter.go"><code>persistence/adapter.go</code></a></p>
+<p>Struct <code>Adapter</code> làm cầu nối giữa interface <code>ingestion.EventPersister</code> và <code>persistence.PostgresWriter</code> mà không tạo import vòng:</p>
+<pre><code>ingestion → (định nghĩa interface EventPersister)
+persistence → (triển khai PostgresWriter.BufferEvent)
+persistence.Adapter → (chuyển đổi ingestion.DeviationEventData → persistence.DeviationEvent)
+cmd/server/main.go → tạo Adapter, truyền cho ingestion.NewHandler
+</code></pre>
+<hr>
+<h2>6. Lược Đồ Cơ Sở Dữ Liệu</h2>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/infra/postgres/init.sql"><code>infra/postgres/init.sql</code></a></p>
+<h3>Bảng: <code>deviation_events</code></h3>
+<p>Bảng lưu trữ chính. Mỗi dòng đại diện cho một điểm GPS được xác nhận là lệch tuyến (&gt;50m so với tuyến kế hoạch).</p>
+<table>
+<thead>
+<tr>
+<th>Cột</th>
+<th>Kiểu</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>id</code></td>
+<td><code>BIGSERIAL PK</code></td>
+<td>Khóa chính tự tăng</td>
+</tr>
+<tr>
+<td><code>driver_id</code></td>
+<td><code>VARCHAR(64)</code></td>
+<td>Mã tài xế duy nhất</td>
+</tr>
+<tr>
+<td><code>trip_id</code></td>
+<td><code>VARCHAR(128)</code></td>
+<td>Mã chuyến đi</td>
+</tr>
+<tr>
+<td><code>latitude</code></td>
+<td><code>DOUBLE PRECISION</code></td>
+<td>Vĩ độ WGS84</td>
+</tr>
+<tr>
+<td><code>longitude</code></td>
+<td><code>DOUBLE PRECISION</code></td>
+<td>Kinh độ WGS84</td>
+</tr>
+<tr>
+<td><code>h3_index</code></td>
+<td><code>VARCHAR(20)</code></td>
+<td>Chỉ mục ô H3 đã tính trước</td>
+</tr>
+<tr>
+<td><code>deviation_meters</code></td>
+<td><code>DOUBLE PRECISION</code></td>
+<td>Khoảng cách từ tuyến kế hoạch (mét)</td>
+</tr>
+<tr>
+<td><code>heading</code></td>
+<td><code>REAL</code></td>
+<td>Hướng đi (0–360°)</td>
+</tr>
+<tr>
+<td><code>speed_kmh</code></td>
+<td><code>REAL</code></td>
+<td>Tốc độ (km/h)</td>
+</tr>
+<tr>
+<td><code>created_at</code></td>
+<td><code>TIMESTAMPTZ</code></td>
+<td>Thời điểm sự kiện (mặc định: NOW())</td>
+</tr>
+</tbody></table>
+<p><strong>Chỉ mục (7 tổng cộng):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Chỉ mục</th>
+<th>Loại</th>
+<th>Cột</th>
+<th>Mục đích</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>idx_deviation_events_created_at</code></td>
+<td>BTree</td>
+<td><code>created_at DESC</code></td>
+<td>Truy vấn theo khoảng thời gian</td>
+</tr>
+<tr>
+<td><code>idx_deviation_events_h3_index</code></td>
+<td>BTree</td>
+<td><code>h3_index</code></td>
+<td>Tổng hợp ô H3</td>
+</tr>
+<tr>
+<td><code>idx_deviation_events_driver_id</code></td>
+<td>BTree</td>
+<td><code>driver_id, created_at DESC</code></td>
+<td>Truy vấn theo tài xế</td>
+</tr>
+<tr>
+<td><code>idx_deviation_events_h3_time</code></td>
+<td>BTree</td>
+<td><code>h3_index, created_at DESC</code></td>
+<td>Truy vấn chính của bảng điều khiển</td>
+</tr>
+<tr>
+<td><code>idx_dev_events_brin_time</code></td>
+<td>BRIN</td>
+<td><code>created_at</code> (32 trang/phạm vi)</td>
+<td>Quét tuần tự phạm vi (dung lượng nhỏ)</td>
+</tr>
+<tr>
+<td><code>idx_dev_events_deviation</code></td>
+<td>BTree</td>
+<td><code>deviation_meters DESC</code></td>
+<td>Lấy mẫu Top-N lệch tuyến</td>
+</tr>
+<tr>
+<td><code>idx_dev_events_lat_lng</code></td>
+<td>BTree</td>
+<td><code>latitude, longitude</code></td>
+<td>Truy vấn bbox viewport (zoom ≥ 11)</td>
+</tr>
+</tbody></table>
+<h3>Bảng: <code>trips</code></h3>
+<table>
+<thead>
+<tr>
+<th>Cột</th>
+<th>Kiểu</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>trip_id</code></td>
+<td><code>VARCHAR(128) PK</code></td>
+<td>Mã chuyến đi duy nhất</td>
+</tr>
+<tr>
+<td><code>driver_id</code></td>
+<td><code>VARCHAR(64)</code></td>
+<td>Tài xế thực hiện chuyến đi</td>
+</tr>
+<tr>
+<td><code>bbox_min/max_lat/lng</code></td>
+<td><code>DOUBLE PRECISION</code></td>
+<td>Hộp bao của tuyến kế hoạch</td>
+</tr>
+<tr>
+<td><code>origin_json</code></td>
+<td><code>JSONB</code></td>
+<td>Metadata điểm xuất phát</td>
+</tr>
+<tr>
+<td><code>destination_json</code></td>
+<td><code>JSONB</code></td>
+<td>Metadata điểm đến</td>
+</tr>
+<tr>
+<td><code>waypoints_json</code></td>
+<td><code>JSONB</code></td>
+<td>Các điểm tuyến kế hoạch</td>
+</tr>
+<tr>
+<td><code>actual_route_json</code></td>
+<td><code>JSONB</code></td>
+<td>Quỹ đạo GPS thực tế</td>
+</tr>
+<tr>
+<td><code>distance_km</code></td>
+<td><code>DOUBLE PRECISION</code></td>
+<td>Quãng đường chuyến đi</td>
+</tr>
+<tr>
+<td><code>duration_min</code></td>
+<td><code>INTEGER</code></td>
+<td>Thời gian chuyến đi</td>
+</tr>
+<tr>
+<td><code>is_deviated</code></td>
+<td><code>BOOLEAN</code></td>
+<td>Tài xế có đi lệch hay không</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>VARCHAR(20)</code></td>
+<td><code>active</code> / <code>completed</code></td>
+</tr>
+<tr>
+<td><code>created_at</code> / <code>completed_at</code></td>
+<td><code>TIMESTAMPTZ</code></td>
+<td>Dấu thời gian</td>
+</tr>
+</tbody></table>
+<h3>Bảng: <code>drivers</code></h3>
+<table>
+<thead>
+<tr>
+<th>Cột</th>
+<th>Kiểu</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>id</code></td>
+<td><code>BIGSERIAL PK</code></td>
+<td>ID tự tăng</td>
+</tr>
+<tr>
+<td><code>driver_id</code></td>
+<td><code>VARCHAR(64) UNIQUE</code></td>
+<td>Mã tài xế cấp nghiệp vụ</td>
+</tr>
+<tr>
+<td><code>email</code></td>
+<td><code>VARCHAR(128) UNIQUE</code></td>
+<td>Email đăng nhập</td>
+</tr>
+<tr>
+<td><code>password_hash</code></td>
+<td><code>VARCHAR(255)</code></td>
+<td>Hash bcrypt</td>
+</tr>
+<tr>
+<td><code>full_name</code></td>
+<td><code>VARCHAR(128)</code></td>
+<td>Tên hiển thị</td>
+</tr>
+<tr>
+<td><code>phone</code></td>
+<td><code>VARCHAR(32)</code></td>
+<td>Số điện thoại</td>
+</tr>
+<tr>
+<td><code>license_plate</code></td>
+<td><code>VARCHAR(32)</code></td>
+<td>Biển số xe</td>
+</tr>
+<tr>
+<td><code>vehicle_type</code></td>
+<td><code>VARCHAR(32)</code></td>
+<td>Mặc định: <code>taxi</code></td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td><code>VARCHAR(20)</code></td>
+<td><code>active</code> / <code>suspended</code></td>
+</tr>
+</tbody></table>
+<h3>View: <code>heatmap_summary</code></h3>
+<p>View dựng sẵn cho truy vấn tổng hợp thường dùng trên bảng điều khiển:</p>
+<pre><code class="language-sql">SELECT h3_index, COUNT(*)::INTEGER AS intensity,
+       MAX(created_at) AS last_updated,
+       COUNT(DISTINCT driver_id) AS unique_drivers
+FROM deviation_events GROUP BY h3_index;
+</code></pre>
+<h3>Hàm: <code>get_heatmap_for_period(p_from, p_to)</code></h3>
+<p>Trả về dữ liệu ô H3 đã tổng hợp cho một khoảng thời gian. Được sử dụng bởi <code>GET /api/history</code>.</p>
+<hr>
+<h2>7. Tham Chiếu REST API</h2>
+<p>URL gốc: <code>http://localhost:8080</code></p>
+<h3>Sức Khỏe &amp; Thống Kê</h3>
+<table>
+<thead>
+<tr>
+<th>Phương thức</th>
+<th>Endpoint</th>
+<th>Mô tả</th>
+<th>Phản hồi</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>GET</code></td>
+<td><code>/api/health</code></td>
+<td>Sức khỏe server + thời gian hoạt động</td>
+<td><code>{ status, uptime_seconds, active_drivers }</code></td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/stats-summary</code></td>
+<td>Thống kê toàn bộ dataset</td>
+<td><code>{ total_points, total_trips, total_drivers, data_from_ms, data_to_ms, ... }</code></td>
+</tr>
+</tbody></table>
+<h3>Quản Lý Chuyến Đi</h3>
+<table>
+<thead>
+<tr>
+<th>Phương thức</th>
+<th>Endpoint</th>
+<th>Tham số</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>POST</code></td>
+<td><code>/api/trips</code></td>
+<td>Body: <code>{ trip_id, driver_id, waypoints, origin, destination, ... }</code></td>
+<td>Lưu chuyến đi từ trình mô phỏng</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/trips</code></td>
+<td><code>?driver_id=&amp;limit=500</code></td>
+<td>Lấy bản ghi chuyến đi</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/trips-summary</code></td>
+<td><code>?page=1&amp;page_size=200&amp;from=&amp;to=&amp;driver_id=</code></td>
+<td>Tóm tắt chuyến đi phân trang (tổng hợp từ deviation_events)</td>
+</tr>
+</tbody></table>
+<h3>Dữ Liệu Bản Đồ Nhiệt</h3>
+<table>
+<thead>
+<tr>
+<th>Phương thức</th>
+<th>Endpoint</th>
+<th>Tham số</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>GET</code></td>
+<td><code>/api/h3-aggregate</code></td>
+<td><code>?from=&amp;to=&amp;resolution=12&amp;min_lat=&amp;max_lat=&amp;min_lng=&amp;max_lng=&amp;driver_id=</code></td>
+<td><strong>Endpoint chính:</strong> Tổng hợp H3 phía server</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/history</code></td>
+<td><code>?from=&amp;to=</code></td>
+<td>Bản đồ nhiệt lịch sử (dùng hàm <code>get_heatmap_for_period</code>)</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/points</code></td>
+<td><code>?from=&amp;to=&amp;limit=50000</code></td>
+<td>Điểm GPS lệch tuyến thô</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/actual-path</code></td>
+<td><code>?from=&amp;to=</code></td>
+<td>Ô H3 đường thực tế (tuyến tài xế đi khi lệch)</td>
+</tr>
+</tbody></table>
+<h3>Phân Tích</h3>
+<table>
+<thead>
+<tr>
+<th>Phương thức</th>
+<th>Endpoint</th>
+<th>Tham số</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>GET</code></td>
+<td><code>/api/deviations</code></td>
+<td><code>?driver_id=&amp;from=&amp;to=</code></td>
+<td>Sự kiện lệch tuyến cá nhân</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/trajectories</code></td>
+<td><code>?trip_id=</code></td>
+<td>GeoJSON LineString cho quỹ đạo GPS chuyến đi</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/road-stats</code></td>
+<td><code>?lat=&amp;lng=&amp;radius=</code></td>
+<td>Thống kê đoạn đường (nhãn tiếng Việt)</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/hourly-stats</code></td>
+<td><code>?from=&amp;to=</code></td>
+<td>Phân bố né tránh theo giờ (biểu đồ 24 giờ)</td>
+</tr>
+</tbody></table>
+<h3>Xác Thực</h3>
+<table>
+<thead>
+<tr>
+<th>Phương thức</th>
+<th>Endpoint</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>POST</code></td>
+<td><code>/api/auth/register</code></td>
+<td>Tạo tài khoản tài xế</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/auth/login</code></td>
+<td>Xác thực tài xế</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/auth/me</code></td>
+<td>Lấy hồ sơ tài xế hiện tại</td>
+</tr>
+</tbody></table>
+<h3>Proxy AI Agent</h3>
+<table>
+<thead>
+<tr>
+<th>Phương thức</th>
+<th>Endpoint</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>POST</code></td>
+<td><code>/api/ai/investigate</code></td>
+<td>Chuyển tiếp đến dịch vụ AI Agent Python</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>8. Giao Thức WebSocket</h2>
+<h3>Tiếp Nhận Tài Xế: <code>/ws/driver</code></h3>
+<p><strong>Hướng:</strong> Trình mô phỏng → Backend<br><strong>Loại tin nhắn:</strong> TextMessage (JSON) hoặc BinaryMessage (Protobuf)<br><strong>Payload:</strong> <code>GPSBatch</code> — mảng các điểm GPS</p>
+<pre><code class="language-json">{
+  &quot;points&quot;: [
+    {
+      &quot;driver_id&quot;: &quot;d-001&quot;,
+      &quot;trip_id&quot;: &quot;trip-abc-123&quot;,
+      &quot;latitude&quot;: 41.1496,
+      &quot;longitude&quot;: -8.6109,
+      &quot;timestamp&quot;: 1724389200000,
+      &quot;heading&quot;: 45.0,
+      &quot;speed&quot;: 32.5
+    }
+  ]
+}
+</code></pre>
+<p><strong>Tần suất:</strong> Mỗi 3 giây từ trình mô phỏng<br><strong>Ràng buộc kích thước:</strong> &lt; 1 KB mỗi lô</p>
+<h3>Bản Đồ Nhiệt Quản Trị: <code>/ws/admin</code></h3>
+<p><strong>Hướng:</strong> Backend → Bảng điều khiển quản trị<br><strong>Loại tin nhắn:</strong> TextMessage (JSON)<br><strong>Payload:</strong> <code>HeatmapUpdate</code> — các ô đã thay đổi kể từ lần cập nhật trước (delta)</p>
+<pre><code class="language-json">{
+  &quot;cells&quot;: [
+    { &quot;h3_index&quot;: &quot;H8:2602:25773&quot;, &quot;intensity&quot;: 3, &quot;last_updated&quot;: 1724389200000 }
+  ],
+  &quot;server_timestamp&quot;: 1724389200000,
+  &quot;total_drivers&quot;: 12,
+  &quot;total_deviations&quot;: 47
+}
+</code></pre>
+<p><strong>Tần suất:</strong> Mỗi 1 giây (khớp với chu kỳ flush Redis)<br><strong>Ràng buộc kích thước:</strong> &lt; 10 KB mỗi lần cập nhật</p>
+<p>Ngoài ra, sự kiện <code>new_trip</code> được phát sóng khi trình mô phỏng lưu chuyến đi hoàn thành:</p>
+<pre><code class="language-json">{
+  &quot;type&quot;: &quot;new_trip&quot;,
+  &quot;trip&quot;: { &quot;trip_id&quot;: &quot;...&quot;, &quot;driver_id&quot;: &quot;...&quot;, &quot;is_deviated&quot;: true, ... }
+}
+</code></pre>
+<hr>
+<h2>9. Lược Đồ Protobuf</h2>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/proto/heatmap/v1/messages.proto"><code>proto/heatmap/v1/messages.proto</code></a></p>
+<p>Đây là <strong>nguồn chính xác duy nhất</strong> cho mọi định dạng tin nhắn. Sau khi thay đổi:</p>
+<ul>
+<li>Go: <code>cd backend &amp;&amp; make proto</code> → tạo code trong <code>backend/gen/heatmap/v1/</code></li>
+<li>JS: Frontend dùng <code>protobufjs</code> để tải file <code>.proto</code> trực tiếp</li>
+</ul>
+<h3>Tin Nhắn: Trình Mô Phỏng → Backend</h3>
+<table>
+<thead>
+<tr>
+<th>Tin nhắn</th>
+<th>Trường</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>GPSPoint</code></td>
+<td><code>driver_id, trip_id, latitude, longitude, timestamp, heading, speed</code></td>
+<td>Một điểm GPS đọc được</td>
+</tr>
+<tr>
+<td><code>GPSBatch</code></td>
+<td><code>repeated GPSPoint points</code></td>
+<td>Lô gửi mỗi 3 giây</td>
+</tr>
+<tr>
+<td><code>TripRoute</code></td>
+<td><code>trip_id, driver_id, repeated Waypoint waypoints</code></td>
+<td>Đăng ký tuyến kế hoạch</td>
+</tr>
+<tr>
+<td><code>Waypoint</code></td>
+<td><code>latitude, longitude</code></td>
+<td>Một điểm trên tuyến đường</td>
+</tr>
+</tbody></table>
+<h3>Tin Nhắn: Backend → Quản Trị</h3>
+<table>
+<thead>
+<tr>
+<th>Tin nhắn</th>
+<th>Trường</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>HeatmapCell</code></td>
+<td><code>h3_index, intensity, last_updated</code></td>
+<td>Một ô hexagon trên bản đồ nhiệt</td>
+</tr>
+<tr>
+<td><code>HeatmapUpdate</code></td>
+<td><code>repeated HeatmapCell cells, server_timestamp, total_drivers, total_deviations</code></td>
+<td>Cập nhật delta mỗi 1 giây</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>10. Frontend — Bảng Điều Khiển Quản Trị</h2>
+<p><strong>Thư mục:</strong> <code>frontend/admin/</code> (React 18 + Vite)</p>
+<h3>Kiến Trúc Component</h3>
+<pre><code>App.jsx
+├── MapContainer.jsx           # Khởi tạo bản đồ MapLibre GL
+│   └── HeatmapLayer.jsx      # ⭐ Vẽ hexagon H3, đùn 3D, logic fetch
+├── FilterPanel.jsx            # Bộ lọc khoảng ngày, tài xế, chuyến đi, điều tra AI
+├── StatsOverlay.jsx           # Hiển thị thống kê live/lịch sử
+├── DriverList.jsx             # Danh sách tài xế với click-to-filter
+├── HourlyAnalyticsChart.jsx   # Biểu đồ phân bố né tránh 24 giờ
+└── ToastNotification.jsx      # Thông báo chuyến đi mới thời gian thực
+</code></pre>
+<h3>Chiến Lược Tải Dữ Liệu</h3>
+<p><strong>Tải Dữ Liệu Tiến Triển</strong> (<a href="file:///d:/Vinuni/heat_map_pro/frontend/admin/src/hooks/useProgressiveData.js"><code>useProgressiveData.js</code></a>):</p>
+<table>
+<thead>
+<tr>
+<th>Pha</th>
+<th>Endpoint</th>
+<th>Thời gian</th>
+<th>Dữ liệu</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Pha 1 (tức thì)</td>
+<td><code>/api/stats-summary</code></td>
+<td>~300ms</td>
+<td>Tổng số đếm, khoảng ngày thực từ CSDL</td>
+</tr>
+<tr>
+<td>Pha 2 (nền)</td>
+<td><code>/api/trips-summary</code></td>
+<td>Streaming</td>
+<td>Danh sách chuyến đi phân trang (200/trang)</td>
+</tr>
+<tr>
+<td>Pha 3 (nền)</td>
+<td><code>/api/points</code></td>
+<td>Streaming</td>
+<td>Điểm GPS chia khúc (50k/khúc)</td>
+</tr>
+</tbody></table>
+<p><strong>Hiển Thị Hexagon H3</strong> (<a href="file:///d:/Vinuni/heat_map_pro/frontend/admin/src/components/HeatmapLayer.jsx"><code>HeatmapLayer.jsx</code></a>):</p>
+<ul>
+<li><strong>Resolution thích ứng:</strong> Mức zoom → H3 resolution (8–14)</li>
+<li><strong>Fetch theo viewport:</strong> Khi <code>moveend</code>, debounce (400ms) rồi fetch <code>/api/h3-aggregate</code> với bbox viewport hiện tại</li>
+<li><strong>Mở rộng bbox:</strong> Đệm 150% mỗi hướng để tải trước hexagon gần mép viewport</li>
+<li><strong>Bbox tối thiểu theo resolution:</strong> Ngăn viewport quá nhỏ trả về 0 ô ở resolution cao</li>
+<li><strong>Vẽ hexagon phía client:</strong> Nhận center + cell_size từ backend, vẽ đa giác 6 đỉnh dùng bảng tra cos/sin (~10ms cho 22k ô)</li>
+<li><strong>Cache LRU:</strong> 20 mục, khóa bằng <code>resolution:bboxHash</code></li>
+<li><strong>Đùn 3D:</strong> Lớp <code>fill-extrusion</code> của MapLibre với chiều cao tỷ lệ thuận <code>ratio</code></li>
+</ul>
+<h3>Các Chế Độ</h3>
+<table>
+<thead>
+<tr>
+<th>Chế độ</th>
+<th>Nguồn dữ liệu</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Lịch sử</strong></td>
+<td>REST API + PostgreSQL</td>
+<td>Duyệt hơn 386k sự kiện lệch tuyến với bộ lọc thời gian/tài xế</td>
+</tr>
+<tr>
+<td><strong>Trực tiếp</strong></td>
+<td>WebSocket + Redis</td>
+<td>Luồng lệch tuyến thời gian thực từ trình mô phỏng đang hoạt động</td>
+</tr>
+</tbody></table>
+<h3>Tích Hợp OSRM (Frontend)</h3>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/frontend/admin/src/utils/osrmRouting.js"><code>utils/osrmRouting.js</code></a></p>
+<ul>
+<li><code>matchTripToRoads()</code> — OSRM <code>/match</code> API cho GPS trace → polyline bắt dính đường</li>
+<li><code>getPlannedRoute()</code> — OSRM <code>/route</code> API cho polyline tuyến kế hoạch</li>
+<li><code>computeH3Overlap()</code> — Tính giao nhau ô H3 giữa tuyến thực tế và kế hoạch</li>
+</ul>
+<hr>
+<h2>11. Frontend — Trình Mô Phỏng Tài Xế</h2>
+<p><strong>Thư mục:</strong> <code>frontend/simulator/</code> (React 18 + Vite)</p>
+<h3>Tính Năng</h3>
+<ul>
+<li><strong>Xác thực tài xế:</strong> Modal đăng ký/đăng nhập với phiên lưu trữ bền (localStorage)</li>
+<li><strong>Lên kế hoạch tuyến:</strong> Click điểm đi + điểm đến trên bản đồ → OSRM <code>/route</code> cho đường kế hoạch</li>
+<li><strong>Vẽ tương tác:</strong> Vẽ tuyến tùy chỉnh trên bản đồ → OSRM <code>/match</code> để bắt dính đường</li>
+<li><strong>Mô phỏng GPS:</strong> Web Worker tạo điểm GPS dọc tuyến kế hoạch với cấu hình:<ul>
+<li>Xác suất đi lệch (tần suất tài xế ra khỏi tuyến)</li>
+<li>Biến thiên tốc độ</li>
+<li>Số tài xế mô phỏng</li>
+</ul>
+</li>
+<li><strong>Streaming WebSocket:</strong> Gửi <code>GPSBatch</code> đến backend mỗi 3 giây qua <code>/ws/driver</code></li>
+<li><strong>Lưu chuyến đi:</strong> Lưu chuyến đi hoàn thành qua <code>POST /api/trips</code></li>
+<li><strong>Lịch sử chuyến đi:</strong> Hiển thị chuyến đi cũ với so sánh tuyến kế hoạch vs thực tế</li>
+</ul>
+<h3>Tuyến Đường Mặc Định</h3>
+<table>
+<thead>
+<tr>
+<th>Điểm</th>
+<th>Tọa độ</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Điểm đi</td>
+<td>10.8184, 106.6588</td>
+<td>Sân bay Tân Sơn Nhất (SGN)</td>
+</tr>
+<tr>
+<td>Điểm đến</td>
+<td>10.7725, 106.6980</td>
+<td>Chợ Bến Thành, Quận 1</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>12. Dịch Vụ AI Agent</h2>
+<p><strong>Thư mục:</strong> <code>ai/agent/</code> (Python + FastAPI)</p>
+<h3>Kiến Trúc: Mẫu ReAct</h3>
+<p>AI agent tuân theo vòng lặp <strong>Suy Luận - Hành Động - Quan Sát</strong>:</p>
+<pre><code>Yêu cầu (h3_index, lat, lng, timestamp) 
+  │
+  ├── Bước 1: Gọi công cụ đồng thời
+  │   ├── Telemetry CSDL (truy vấn PostgreSQL)
+  │   ├── API Thời Tiết (Open-Meteo)
+  │   └── Chuyển Tọa Độ Ngược (Nominatim)
+  │
+  ├── Bước 2: Công cụ phụ (phụ thuộc kết quả Bước 1)
+  │   ├── Hồ Sơ Tài Xế (lịch sử tuân thủ)
+  │   ├── Tuyến Thay Thế OSRM (phân tích tuyến)
+  │   └── Tỷ Lệ Tốc Độ Giao Thông (phát hiện tắc nghẽn)
+  │
+  ├── Bước 3: Tìm kiếm tin tức có điều kiện
+  │   └── Kích hoạt nếu: high_dev_trips &gt; 0 HOẶC SEVERE_GRIDLOCK HOẶC mưa &gt; 5mm
+  │
+  └── Bước 4: Tổng hợp LLM
+      └── Groq (LLaMA 3.3 70B) hoặc Gemini → DiagnosisResult
+</code></pre>
+<h3>Các Hàm Công Cụ (7 tổng cộng)</h3>
+<table>
+<thead>
+<tr>
+<th>Công cụ</th>
+<th>Nguồn</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>db_telemetry</code></td>
+<td>PostgreSQL</td>
+<td>Truy vấn sự kiện lệch tuyến, tính thống kê, làm mượt Bayesian, ngưỡng động</td>
+</tr>
+<tr>
+<td><code>weather</code></td>
+<td>Open-Meteo API</td>
+<td>Nhiệt độ, lượng mưa, tốc độ gió (lịch sử hoặc hiện tại)</td>
+</tr>
+<tr>
+<td><code>reverse_geocode</code></td>
+<td>Nominatim</td>
+<td>Tọa độ → địa chỉ dễ đọc</td>
+</tr>
+<tr>
+<td><code>news_search</code></td>
+<td>Tìm kiếm web</td>
+<td>Tìm sự cố giao thông gần vị trí</td>
+</tr>
+<tr>
+<td><code>osrm_alternatives</code></td>
+<td>OSRM <code>/route</code></td>
+<td>Phân tích tuyến thay thế (đi tắt vs đi vòng)</td>
+</tr>
+<tr>
+<td><code>driver_profile</code></td>
+<td>PostgreSQL</td>
+<td>Tỷ lệ tuân thủ 30 ngày, mức uy tín</td>
+</tr>
+<tr>
+<td><code>traffic_speed_ratio</code></td>
+<td>PostgreSQL + OSRM</td>
+<td>Tốc độ cơ sở vs hiện tại, phân loại tắc nghẽn</td>
+</tr>
+</tbody></table>
+<h3>Phân Loại Rủi Ro</h3>
+<table>
+<thead>
+<tr>
+<th>Mức</th>
+<th>Ý nghĩa</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>SAFE_FORCE_MAJEURE</code></td>
+<td>Lệch tuyến được giải thích bởi thời tiết, giao thông, hoặc điều kiện đường</td>
+</tr>
+<tr>
+<td><code>SUSPICIOUS</code></td>
+<td>Mẫu bất thường, cần theo dõi</td>
+</tr>
+<tr>
+<td><code>FRAUD_ALERT</code></td>
+<td>Rủi ro cao: vi phạm lặp lại, không có giải thích từ môi trường</td>
+</tr>
+<tr>
+<td><code>ANALYSIS_UNAVAILABLE</code></td>
+<td>Dữ liệu không đủ để chẩn đoán</td>
+</tr>
+</tbody></table>
+<h3>Mô Hình Dữ Liệu</h3>
+<p><strong>Yêu cầu:</strong> <code>InvestigateRequest</code></p>
+<pre><code class="language-python">h3_index: str           # Ô H3 cần điều tra
+lat, lng: float         # Tọa độ tâm
+time_window_minutes: int = 60
+timestamp_ms: int | None
+driver_id: str | None
+end_lat, end_lng: float | None  # Tọa độ điểm đến cho phân tích OSRM
+</code></pre>
+<p><strong>Phản hồi:</strong> <code>DiagnosisResult</code></p>
+<pre><code class="language-python">h3_index: str
+risk_level: str         # &quot;SAFE_FORCE_MAJEURE&quot; | &quot;SUSPICIOUS&quot; | &quot;FRAUD_ALERT&quot;
+confidence: float       # 0.0 đến 1.0
+summary: str            # Chẩn đoán dễ đọc (tiếng Việt)
+evidence: Evidence      # Tất cả bằng chứng thu thập được
+recommendation: str     # Hành động đề xuất
+</code></pre>
+<hr>
+<h2>13. Hạ Tầng &amp; Triển Khai</h2>
+<h3>Các Dịch Vụ Docker Compose</h3>
+<p><strong>File:</strong> <a href="file:///d:/Vinuni/heat_map_pro/infra/docker-compose.yml"><code>infra/docker-compose.yml</code></a></p>
+<table>
+<thead>
+<tr>
+<th>Dịch vụ</th>
+<th>Image</th>
+<th>Cổng</th>
+<th>Giới hạn RAM</th>
+<th>Giới hạn CPU</th>
+<th>Phụ thuộc</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>osrm</code></td>
+<td><code>osrm/osrm-backend:latest</code></td>
+<td>5000 (nội bộ)</td>
+<td>400 MB</td>
+<td>1.0</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>postgres</code></td>
+<td><code>postgis/postgis:16-3.4-alpine</code></td>
+<td>5432</td>
+<td>800 MB</td>
+<td>0.5</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>redis</code></td>
+<td><code>redis:7-alpine</code></td>
+<td>6379</td>
+<td>200 MB</td>
+<td>0.25</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>backend</code></td>
+<td>Tùy chỉnh (Go đa giai đoạn)</td>
+<td>8080 (nội bộ)</td>
+<td>100 MB</td>
+<td>0.5</td>
+<td>osrm, postgres, redis</td>
+</tr>
+<tr>
+<td><code>ai-agent</code></td>
+<td>Tùy chỉnh (Python)</td>
+<td>8090</td>
+<td>150 MB</td>
+<td>0.5</td>
+<td>postgres</td>
+</tr>
+<tr>
+<td><code>nginx</code></td>
+<td><code>nginx:alpine</code></td>
+<td><strong>80</strong></td>
+<td>50 MB</td>
+<td>0.25</td>
+<td>backend</td>
+</tr>
+</tbody></table>
+<p><strong>Tổng ngân sách tài nguyên:</strong> 1.700 MB RAM, 3.0 lõi CPU — thiết kế cho <strong>VPS 4 GB</strong>.</p>
+<h3>Định Tuyến Nginx</h3>
+<table>
+<thead>
+<tr>
+<th>Đường dẫn</th>
+<th>Backend</th>
+<th>Giao thức</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>/api/*</code></td>
+<td>Go backend :8080</td>
+<td>HTTP (timeout 30 giây)</td>
+</tr>
+<tr>
+<td><code>/ws/*</code></td>
+<td>Go backend :8080</td>
+<td>WebSocket upgrade (timeout 1 giờ)</td>
+</tr>
+<tr>
+<td><code>/admin/*</code></td>
+<td>File tĩnh</td>
+<td>SPA (fallback index.html)</td>
+</tr>
+<tr>
+<td><code>/simulator/*</code></td>
+<td>File tĩnh</td>
+<td>SPA (fallback index.html)</td>
+</tr>
+<tr>
+<td><code>/</code></td>
+<td>Chuyển hướng</td>
+<td>→ <code>/admin</code></td>
+</tr>
+</tbody></table>
+<h3>Dockerfile Backend</h3>
+<p>Build đa giai đoạn:</p>
+<ol>
+<li><strong>Giai đoạn build:</strong> <code>golang:1.22-alpine</code> + <code>gcc musl-dev</code> (cho CGO)</li>
+<li><strong>Giai đoạn chạy:</strong> <code>alpine:3.19</code> với người dùng không phải root (uid 1001)</li>
+<li><strong>Bảo mật:</strong> <code>ca-certificates</code>, <code>libc6-compat</code>, chạy dưới quyền <code>appuser</code></li>
+<li><strong>Health check:</strong> <code>wget -qO- http://localhost:8080/api/health</code></li>
+</ol>
+<h3>Lệnh Khởi Động</h3>
+<pre><code class="language-bash"># Production (toàn bộ stack Docker)
+make up
+# hoặc: docker compose -f infra/docker-compose.yml --env-file .env up -d --build
+
+# Phát triển (Docker cho hạ tầng, native cho code ứng dụng)
+npm run start
+# Lệnh này chạy:
+#   1. prestart: docker compose up postgres redis ai-agent
+#   2. concurrently: go run ./cmd/server | npm run dev (admin) | npm run dev (simulator)
+</code></pre>
+<hr>
+<h2>14. Ràng Buộc Hiệu Năng &amp; Tối Ưu Hóa</h2>
+<h3>Ràng Buộc Backend</h3>
+<table>
+<thead>
+<tr>
+<th>Chỉ số</th>
+<th>Mục tiêu</th>
+<th>Thực tế</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>RAM Go backend</td>
+<td>&lt; 50 MB</td>
+<td>Đo trong giới hạn cho 500 tài xế</td>
+</tr>
+<tr>
+<td>Tin nhắn WebSocket (tài xế → backend)</td>
+<td>&lt; 1 KB</td>
+<td>~200–500 bytes mỗi lô</td>
+</tr>
+<tr>
+<td>Cập nhật bản đồ nhiệt (backend → quản trị)</td>
+<td>&lt; 10 KB</td>
+<td>~2–8 KB mỗi delta 1 giây</td>
+</tr>
+<tr>
+<td>Timeout OSRM</td>
+<td>500 ms</td>
+<td>Cấu hình qua <code>OSRM_MATCH_TIMEOUT_MS</code></td>
+</tr>
+<tr>
+<td>Chu kỳ flush Redis</td>
+<td>1 giây</td>
+<td>Cấu hình qua <code>FLUSH_INTERVAL_REDIS_MS</code></td>
+</tr>
+<tr>
+<td>Chu kỳ flush PostgreSQL</td>
+<td>30 giây</td>
+<td>Cấu hình qua <code>FLUSH_INTERVAL_POSTGRES_S</code></td>
+</tr>
+</tbody></table>
+<h3>Hiệu Năng Tổng Hợp H3</h3>
+<table>
+<thead>
+<tr>
+<th>Resolution</th>
+<th>Số ô điển hình</th>
+<th>Thời gian phản hồi</th>
+<th>Yêu cầu Bbox</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>8 (mặc định)</td>
+<td>~1.200</td>
+<td>~800ms</td>
+<td>Không</td>
+</tr>
+<tr>
+<td>9</td>
+<td>~9.700</td>
+<td>~1,5 giây</td>
+<td>Không</td>
+</tr>
+<tr>
+<td>10</td>
+<td>~22.000</td>
+<td>~800ms</td>
+<td>Có (0,20°)</td>
+</tr>
+<tr>
+<td>11</td>
+<td>~15.000</td>
+<td>~600ms</td>
+<td>Có (0,10°)</td>
+</tr>
+<tr>
+<td>12</td>
+<td>~31.500</td>
+<td>~1,2 giây</td>
+<td>Có (0,08°)</td>
+</tr>
+<tr>
+<td>13</td>
+<td>~4.700</td>
+<td>~412ms</td>
+<td>Có (0,01°)</td>
+</tr>
+<tr>
+<td>14</td>
+<td>~3.600</td>
+<td>~240ms</td>
+<td>Có (0,006°)</td>
+</tr>
+</tbody></table>
+<h3>Chiến Lược Cache (3 Tầng)</h3>
+<table>
+<thead>
+<tr>
+<th>Tầng</th>
+<th>Loại cache</th>
+<th>TTL</th>
+<th>Mục đích</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Backend h3-aggregate</td>
+<td><code>sync.Map</code> (trong bộ nhớ)</td>
+<td>60 giây</td>
+<td>Tránh quét lại 386k dòng khi zoom/pan nhanh</td>
+</tr>
+<tr>
+<td>Frontend h3GeoJSON</td>
+<td>JavaScript <code>Map</code> (LRU-20)</td>
+<td>Phiên</td>
+<td>Vẽ lại tức thì khi zoom ngược lại</td>
+</tr>
+<tr>
+<td>Frontend progressive data</td>
+<td><code>sessionStorage</code></td>
+<td>5 phút</td>
+<td>Tránh fetch lại trips/points khi tải lại trang</td>
+</tr>
+</tbody></table>
+<h3>Kỹ Thuật Tối Ưu Hóa</h3>
+<ol>
+<li><strong>Lọc Trước Hộp Bao:</strong> ~80% điểm GPS không bao giờ đến OSRM (kiểm tra chứa O(1))</li>
+<li><strong>Bộ Tổng Hợp Không Khóa:</strong> <code>sync.Map</code> + <code>atomic.AddUint64</code> — không tranh chấp mutex trên đường nóng</li>
+<li><strong>H3 Phía Server:</strong> Loại bỏ việc gửi 386k điểm thô đến trình duyệt; nhanh hơn 50–300 lần</li>
+<li><strong>Nén Gzip:</strong> Giảm ~80% dung lượng phản hồi JSON (quan trọng cho payload 30k ô)</li>
+<li><strong>Fetch Theo Viewport:</strong> Frontend chỉ fetch vùng nhìn thấy + đệm 150%</li>
+<li><strong>Resolution Thích Ứng:</strong> Zoom cao hơn → ô nhỏ hơn → bbox nhỏ hơn → ít dòng quét hơn</li>
+<li><strong>Chỉ Mục PostgreSQL:</strong> 7 chỉ mục bao phủ mọi mẫu truy vấn (BTree, BRIN, composite)</li>
+<li><strong>Hexagon Tính Trước:</strong> Backend gửi <code>center_lat + cell_size</code>; frontend vẽ bằng bảng tra sin/cos</li>
+</ol>
+<hr>
+<h2>15. Biến Môi Trường</h2>
+<p>Xem <a href="file:///d:/Vinuni/heat_map_pro/.env.example"><code>.env.example</code></a> để có mẫu đầy đủ với chú thích.</p>
+<h3>Bắt Buộc Cho Production</h3>
+<table>
+<thead>
+<tr>
+<th>Biến</th>
+<th>Ví dụ</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>POSTGRES_PASSWORD</code></td>
+<td>(thay đổi từ mặc định)</td>
+<td>Mật khẩu cơ sở dữ liệu</td>
+</tr>
+<tr>
+<td><code>GROQ_API_KEY</code></td>
+<td><code>gsk_...</code></td>
+<td>Khóa API Groq cho AI agent</td>
+</tr>
+</tbody></table>
+<h3>Biến Frontend Lúc Build</h3>
+<table>
+<thead>
+<tr>
+<th>Biến</th>
+<th>Mặc định</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>VITE_WS_URL</code></td>
+<td><code>ws://localhost:8080/ws</code></td>
+<td>URL gốc WebSocket</td>
+</tr>
+<tr>
+<td><code>VITE_API_URL</code></td>
+<td><code>http://localhost:8080/api</code></td>
+<td>URL gốc REST API</td>
+</tr>
+<tr>
+<td><code>VITE_MAP_STYLE</code></td>
+<td>URL CARTO dark-matter</td>
+<td>Kiểu tile MapLibre</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>16. Quy Trình Phát Triển</h2>
+<h3>Bắt Đầu Nhanh</h3>
+<pre><code class="language-bash"># 1. Clone và cài đặt
+git clone &lt;repo_url&gt;
+cd heat_map_pro
+npm run install:all
+
+# 2. Sao chép cấu hình môi trường
+cp .env.example .env
+
+# 3. Khởi động mọi thứ (Docker hạ tầng + ứng dụng native)
+npm run start
+</code></pre>
+<p>Lệnh này sẽ:</p>
+<ul>
+<li>Khởi động PostgreSQL, Redis, AI Agent qua Docker Compose</li>
+<li>Khởi động Go backend (<code>go run ./cmd/server</code>)</li>
+<li>Khởi động Bảng điều khiển quản trị (Vite dev server, cổng 3002)</li>
+<li>Khởi động Trình mô phỏng (Vite dev server, cổng 3001)</li>
+</ul>
+<h3>Các Lệnh Make Có Sẵn</h3>
+<table>
+<thead>
+<tr>
+<th>Lệnh</th>
+<th>Mô tả</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>make up</code></td>
+<td>Khởi động toàn bộ stack Docker production</td>
+</tr>
+<tr>
+<td><code>make down</code></td>
+<td>Dừng tất cả dịch vụ Docker</td>
+</tr>
+<tr>
+<td><code>make dev</code></td>
+<td>Khởi động môi trường dev với <code>air</code> hot-reload</td>
+</tr>
+<tr>
+<td><code>make proto</code></td>
+<td>Tạo lại code Go từ Protobuf</td>
+</tr>
+<tr>
+<td><code>make test-all</code></td>
+<td>Chạy tất cả test Go với cờ <code>-race</code></td>
+</tr>
+<tr>
+<td><code>make lint</code></td>
+<td>Chạy <code>golangci-lint</code> trên backend</td>
+</tr>
+<tr>
+<td><code>make osrm-prepare</code></td>
+<td>Tải và chuẩn bị dữ liệu bản đồ OSRM</td>
+</tr>
+<tr>
+<td><code>make clean</code></td>
+<td>Xóa tất cả artifact build</td>
+</tr>
+</tbody></table>
+<h3>Quy Ước Git</h3>
+<ul>
+<li><strong>Đặt tên nhánh:</strong> <code>feature/&lt;module&gt;-&lt;mô_tả&gt;</code>, <code>fix/&lt;module&gt;-&lt;mô_tả&gt;</code></li>
+<li><strong>Thông điệp commit:</strong> <code>feat(module): mô tả</code>, <code>fix(module): mô tả</code></li>
+</ul>
+<hr>
+<h2>17. Chiến Lược Kiểm Thử</h2>
+<h3>Backend Go</h3>
+<ul>
+<li><strong>Lệnh:</strong> <code>go test ./... -v -race -count=1</code></li>
+<li><strong>Mẫu:</strong> Test theo bảng (table-driven) trong file <code>_test.go</code> cạnh source code</li>
+<li><strong>Phạm vi bao phủ:</strong><ul>
+<li><code>aggregator/lockfree_test.go</code> — Tăng đồng thời + tính đúng đắn snapshot</li>
+<li><code>aggregator/aggregator_test.go</code> — Logic tổng hợp chung</li>
+<li><code>filter/bounding_box_test.go</code> — Độ chính xác kiểm tra chứa</li>
+<li><code>filter/osrm_client_test.go</code> — Mock HTTP server cho phản hồi OSRM</li>
+<li><code>filter/filter_test.go</code> — Tích hợp: bbox → OSRM → ngưỡng pipeline</li>
+<li><code>spatial/h3_indexer_test.go</code> — Tính toán lưới, khứ hồi ô↔tọa độ</li>
+<li><code>persistence/postgres_test.go</code> — Thao tác cơ sở dữ liệu</li>
+</ul>
+</li>
+</ul>
+<h3>AI Agent</h3>
+<ul>
+<li><strong>File:</strong> <code>ai/agent/test_suite.py</code></li>
+<li><strong>Test:</strong> Unit test hàm công cụ, kiểm tra định dạng phản hồi LLM, tích hợp ReAct engine</li>
+</ul>
+<h3>Frontend</h3>
+<ul>
+<li>React Testing Library cho test hiển thị component (dự kiến)</li>
+<li>Kiểm tra thủ công: quan sát trực quan hiển thị H3 ở nhiều mức zoom</li>
+</ul>
+<h3>Kiểm Thử Tích Hợp</h3>
+<ul>
+<li>Client OSRM được test với mock HTTP server (không phải OSRM thật)</li>
+<li>Test pipeline đầy đủ: mô phỏng điểm GPS → xác nhận sự kiện lệch tuyến trong PostgreSQL</li>
+</ul>
+<hr>
+<blockquote>
+<p><strong>Tài liệu được tạo từ phân tích mã nguồn kho <code>heat_map_pro</code>.</strong><br><strong>Tất cả tham chiếu code đều liên kết đến file nguồn thực tế để truy vết.</strong></p>
+</blockquote>
+
+</body>
+</html>

@@ -3,7 +3,7 @@
 > **Dự án:** heat_map_pro  
 > **Phiên bản:** 1.0.0  
 > **Cập nhật lần cuối:** 23/08/2026  
-> **Nhóm thực hiện:** VinUni Capstone Team
+> **Người thực hiện:** Nguyễn Văn Đoan
 
 ---
 
