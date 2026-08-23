@@ -1,5 +1,5 @@
-import { useEffect, useRef, useMemo, useState } from 'react';
-import { latLngToCell, cellToBoundary } from 'h3-js';
+import { useEffect, useRef, useState } from 'react';
+import { cellToBoundary } from 'h3-js';
 import { snapPointsBatch } from '../utils/osrmRouting';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
@@ -29,6 +29,7 @@ function zoomToH3Resolution(zoom) {
   if (zoom < 18) return 13;  // ~3m/ô   — làn xe
   return 14;                 // ~1m/ô   — MAX, chi tiết nhất
 }
+
 
 // ── Shared popup helper ───────────────────────────────────────────────────────
 /**
@@ -150,35 +151,23 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps, points = []) {
   const PopupClass = map._maplibregl?.Popup || window.maplibregl?.Popup;
   const f = cellProps;
 
-  // Compute exact Geographic Bounding Box [minLat, maxLat, minLng, maxLng] of the H3 Hexagon cell
-  let minLat = 0, maxLat = 0, minLng = 0, maxLng = 0;
-  let centerLat = popupLngLat?.lat || 0;
-  let centerLng = popupLngLat?.lng || 0;
-
-  try {
-    if (f && f.h3Index) {
-      const boundary = cellToBoundary(f.h3Index, true); // [[lng, lat], ...]
-      if (Array.isArray(boundary) && boundary.length > 0) {
-        const lats = boundary.map(p => p[1]);
-        const lngs = boundary.map(p => p[0]);
-        minLat = Math.min(...lats);
-        maxLat = Math.max(...lats);
-        minLng = Math.min(...lngs);
-        maxLng = Math.max(...lngs);
-        centerLat = (minLat + maxLat) / 2.0;
-        centerLng = (minLng + maxLng) / 2.0;
-      }
-    }
-  } catch (err) {
-    console.warn('[show3DH3CellPopup] cellToBoundary failed for', f?.h3Index, err);
-  }
+  // Server already provides center_lat/center_lng + bbox from CellToBoundary().
+  // No need to call h3-js cellToBoundary() — the server grid format is incompatible.
+  let centerLat = f.center_lat || popupLngLat?.lat || 0;
+  let centerLng = f.center_lng || popupLngLat?.lng || 0;
+  const minLat = centerLat - 0.0005;
+  const maxLat = centerLat + 0.0005;
+  const minLng = centerLng - 0.0005;
+  const maxLng = centerLng + 0.0005;
+  // Use cell index (server format) for display; fall back to h3Index for backward compat
+  const cellId = f.cell || f.h3Index || '?';
 
   const loading = new PopupClass({ offset: 12, maxWidth: '300px' })
     .setLngLat(popupLngLat)
     .setHTML(`
       <div style="font-family:Inter,sans-serif;color:#333;font-size:13px;line-height:1.6;padding:2px">
         <div style="font-weight:700;margin-bottom:4px;color:#1b5e20">📊 Đang phân tích ô 3D H3…</div>
-        <div style="color:#666;font-size:11px">Mã Cell: <code style="background:#e8f5e9;padding:2px 4px;border-radius:4px;color:#2e7d32">${f.h3Index}</code></div>
+        <div style="color:#666;font-size:11px">Mã Cell: <code style="background:#e8f5e9;padding:2px 4px;border-radius:4px;color:#2e7d32">${cellId}</code></div>
       </div>
     `)
     .addTo(map);
@@ -202,13 +191,17 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps, points = []) {
 
     const fmtDev = v => v >= 1000 ? `${(v / 1000).toFixed(1)} km` : `${Math.round(v)} m`;
 
-    const highDevTrips = f.avoidTripsCount ?? (dbStats?.high_dev_trips ?? 0);
-    const totalTrips = f.totalTripsCount ?? (dbStats?.unique_trips ?? f.count ?? 0);
-    const drivers = dbStats?.unique_drivers ?? f.totalTripsCount ?? 0;
+    // Server provides aggregated stats directly in cell properties:
+    // avoid_trips, total_trips, avg_dev, max_dev
+    const highDevTrips = f.avoid_trips ?? (dbStats?.high_dev_trips ?? 0);
+    const totalTrips = f.total_trips ?? (dbStats?.unique_trips ?? f.count ?? 0);
+    // unique_drivers: now provided directly by backend h3-aggregate (distinct driver_ids).
+    // Falls back to dbStats then to totalTrips only if neither is available.
+    const drivers = f.unique_drivers ?? (dbStats?.unique_drivers ?? totalTrips);
     const normalTrips = Math.max(0, totalTrips - highDevTrips);
     const avoidRatio = totalTrips > 0 ? ((highDevTrips / totalTrips) * 100) : 0;
-    const avgDev = dbStats?.avg_deviation ?? f.avgDev ?? 0;
-    const maxDev = dbStats?.max_deviation ?? f.maxDev ?? 0;
+    const avgDev = f.avg_dev ?? (dbStats?.avg_deviation ?? 0);
+    const maxDev = f.max_dev ?? (dbStats?.max_deviation ?? 0);
 
     const riskLabel = avoidRatio > 50 ? '🔴 Rủi ro Bẻ lái Cao' : avoidRatio > 20 ? '🟡 Cảnh báo Né tránh' : '🟢 An toàn (Đúng tuyến)';
     const riskBg = avoidRatio > 50 ? '#ffebee' : avoidRatio > 20 ? '#fff8e1' : '#e8f5e9';
@@ -228,7 +221,7 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps, points = []) {
           </div>
 
           <div style="font-size:11px;color:#666;margin-bottom:8px">
-            Mã Cell: <code style="background:#e8f5e9;padding:2px 5px;border-radius:4px;color:#2e7d32;font-weight:600">${f.h3Index}</code>
+            Mã Cell: <code style="background:#e8f5e9;padding:2px 5px;border-radius:4px;color:#2e7d32;font-weight:600">${cellId}</code>
           </div>
 
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:8px;background:#f8f9fa;padding:8px;border-radius:8px;text-align:center">
@@ -304,7 +297,7 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps, points = []) {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                h3_index: f.h3Index,
+                h3_index: cellId,
                 lat: centerLat,
                 lng: centerLng,
                 time_window_minutes: 60,
@@ -411,6 +404,9 @@ export default function HeatmapLayer({
   show3DH3Grid = true,
   showActualPath = false,
   actualPathCells = [],
+  historyFrom = null,  // Unix ms — used for viewport bbox fetch at high zoom
+  historyTo = null,    // Unix ms
+  apiUrl = 'http://localhost:8080',
 }) {
   const initialized = useRef(false);
   const clickHandler = useRef(null);
@@ -424,6 +420,25 @@ export default function HeatmapLayer({
 
   // H3 resolution thích ứng zoom: khởi tạo mặc định Res 12 (~9m), sẽ cập nhật khi map mount
   const [h3Resolution, setH3Resolution] = useState(12);
+
+  // ── Web Worker state & refs ───────────────────────────────────────────────
+  // Computed GeoJSON from worker (replaces the two useMemos):
+  const [h3GeoJSON, setH3GeoJSON] = useState({ type: 'FeatureCollection', features: [] });
+  const [actualPathH3GeoJSON, setActualPathH3GeoJSON] = useState({ type: 'FeatureCollection', features: [] });
+
+  // Worker singleton — created once, terminated on unmount
+  const workerRef = useRef(null);
+
+  // LRU cache: key = `${resLevel}` at low zoom, `${resLevel}:${bboxHash}` at high zoom
+  // Each entry: { h3GeoJSON, actualPathH3GeoJSON }
+  // Cache is invalidated when `points` array reference changes (new data load).
+  const h3GeoJSONCacheRef = useRef(new Map());
+  const cachedPointsRef = useRef(null); // tracks which points array is cached
+
+  // At high zoom (res >= 11), we fetch viewport-specific points from backend.
+  // This ref holds the currently fetched viewport points.
+  const viewportPointsRef = useRef(null);
+  const viewportFetchAbortRef = useRef(null); // AbortController for in-flight fetch
 
   // Keep show3DH3Ref in sync
   useEffect(() => {
@@ -464,12 +479,14 @@ export default function HeatmapLayer({
     let timer = null;
     const onZoomEnd = () => {
       clearTimeout(timer);
+      // 500ms debounce (up from 300ms) — prevents spamming the Worker during
+      // fast continuous zoom gestures on the Porto 386k-point dataset.
       timer = setTimeout(() => {
         setH3Resolution(prev => {
           const next = zoomToH3Resolution(map.getZoom());
           return prev !== next ? next : prev; // Chỉ update khi đổi resolution tier thật sự
         });
-      }, 300);
+      }, 500);
     };
 
     map.on('zoomend', onZoomEnd);
@@ -683,94 +700,210 @@ export default function HeatmapLayer({
     }
   }, [map, showHeatmap, show3DH3Grid, showActualPath]);
 
-  // ── Pre-compute 3D H3 Hexagon GeoJSON — zoom-adaptive resolution ──────────
-  // Re-computes khi `h3Resolution` đổi (khi zoom vượt ngưỡng tier) hoặc khi `points` đổi.
-  const h3GeoJSON = useMemo(() => {
-    if (!points || points.length === 0) return { type: 'FeatureCollection', features: [] };
+  // ── Server-side H3 Aggregation: fetch pre-computed cells ─────────────────
+  // The backend /api/h3-aggregate endpoint:
+  //   • Scans ALL rows in PostgreSQL (no sampling, no data loss)
+  //   • Computes LatLngToCell(lat, lng, resolution) for every point in Go (O(1))
+  //   • Aggregates per cell: count, avg_dev, avoid_trips, ratio, height
+  //   • Returns center_lat/lng + cell_size_deg (frontend draws hexagon locally)
+  // This is ~50-300x faster than shipping raw GPS points to the browser.
+  //
+  // FIX: moveend triggers a re-fetch with the updated viewport bbox.
+  // Without this, panning after zoom would show blank hexagons because the
+  // bbox hash changes (new area) but h3Resolution doesn't → useEffect doesn't re-run.
+  const [viewportBbox, setViewportBbox] = useState(null);
 
-    // Zoom-adaptive resolution từ h3Resolution state (thay đổi theo zoom level):
-    // Zoom <10 → Res 9 (~174m) | 10-11 → Res 10 (~66m) | 12-13 → Res 11 (~25m)
-    // 14-15 → Res 12 (~9m)     | 16-17 → Res 13 (~3m)   | ≥18   → Res 14 (~1m) [MAX]
-    const resLevel = h3Resolution; // lấy từ zoom-adaptive state
+  // Listen to moveend to update bbox and trigger re-fetch
+  useEffect(() => {
+    if (!map) return;
 
-    const h3CellMap = new Map();
-    let maxAvoidScore = 1;
-
-    for (let i = 0; i < points.length; i++) {
-      const pt = points[i];
-      if (!pt.lat || !pt.lng) continue;
-
-      const cell = latLngToCell(pt.lat, pt.lng, resLevel);
-      const isAvoidance = (pt.deviation || 0) > 150;
-      // Derive a consistent trip key: use pt.trip_id if present, otherwise group nearby trajectory points per driver/spatial cluster
-      const tripKey = pt.trip_id || (pt.driver_id ? `driver-${pt.driver_id}` : `cluster-${Math.floor(pt.lat * 250)},${Math.floor(pt.lng * 250)}`);
-      const item = h3CellMap.get(cell);
-
-      if (!item) {
-        const totalTripsSet = new Set([tripKey]);
-        const avoidTripsSet = new Set();
-        if (isAvoidance) avoidTripsSet.add(tripKey);
-
-        h3CellMap.set(cell, {
-          cell,
-          count: 1,
-          totalTripsSet,
-          avoidTripsSet,
-          totalDev: pt.deviation || 0,
-          maxDev: pt.deviation || 0,
-        });
-      } else {
-        item.count++;
-        item.totalTripsSet.add(tripKey);
-        if (isAvoidance) item.avoidTripsSet.add(tripKey);
-        item.totalDev += (pt.deviation || 0);
-        item.maxDev = Math.max(item.maxDev, pt.deviation || 0);
-      }
-    }
-
-    // Compute max avoidance score across all H3 cells
-    for (const item of h3CellMap.values()) {
-      const avoidTripsCount = item.avoidTripsSet.size;
-      const avoidScore = avoidTripsCount;
-      if (avoidScore > maxAvoidScore) {
-        maxAvoidScore = avoidScore;
-      }
-    }
-
-    const features = [];
-    for (const item of h3CellMap.values()) {
+    const getBbox = () => {
       try {
-        const boundary = cellToBoundary(item.cell, true);
-        if (!boundary || boundary.length === 0) continue;
+        const b = map.getBounds();
+        // toFixed(3) ≈ 100m snapping — fine enough to reuse cache when panning slightly
+        // without triggering a new fetch on every micro-pan.
+        // (toFixed(2) was 1.1km — too coarse, caused different positions to share same key)
+        return {
+          minLat: b.getSouth().toFixed(3),
+          maxLat: b.getNorth().toFixed(3),
+          minLng: b.getWest().toFixed(3),
+          maxLng: b.getEast().toFixed(3),
+        };
+      } catch { return null; }
+    };
 
-        const avoidTripsCount = item.avoidTripsSet.size;
-        const totalTripsCount = item.totalTripsSet.size;
-        const avoidScore = avoidTripsCount;
+    // Sync immediately on mount
+    setViewportBbox(getBbox());
 
-        // Ratio normalized against the max avoidance score in current view
-        const ratio = maxAvoidScore > 0 ? (avoidScore / maxAvoidScore) : 0;
-        const avgDev = Math.round(item.totalDev / item.count);
+    let moveTimer = null;
+    const onMoveEnd = () => {
+      clearTimeout(moveTimer);
+      // 400ms debounce — prevents backend spam during continuous pan/drag
+      moveTimer = setTimeout(() => {
+        setViewportBbox(getBbox());
+      }, 400);
+    };
 
-        features.push({
-          type: 'Feature',
-          geometry: { type: 'Polygon', coordinates: [boundary] },
-          properties: {
-            h3Index: item.cell,
-            count: item.count,
-            avoidTripsCount: avoidTripsCount,
-            totalTripsCount: totalTripsCount,
-            ratio: ratio,
-            res: resLevel,
-            height: Math.max(10, Math.round(ratio * 250)), // Extrusion height strictly proportional to avoidance volume & ratio (10m to 250m)
-            avgDev: avgDev,
-            maxDev: Math.round(item.maxDev),
-          },
-        });
-      } catch (_) { }
+    map.on('moveend', onMoveEnd);
+    return () => {
+      map.off('moveend', onMoveEnd);
+      clearTimeout(moveTimer);
+    };
+  }, [map]);
+
+  useEffect(() => {
+    if (!map) return;
+    // historyFrom comes from /api/stats-summary data_from_ms — no hardcoded dates.
+    // If not yet loaded (null), use epoch so backend returns full dataset.
+    const fromMs = historyFrom || 0;
+
+    // Cache invalidation when parent passes fresh points (new date range load)
+    if (cachedPointsRef.current !== points) {
+      h3GeoJSONCacheRef.current.clear();
+      cachedPointsRef.current = points;
     }
 
-    return { type: 'FeatureCollection', features };
-  }, [points, h3Resolution]);
+    // Build bbox params — always send bbox to keep response fast.
+    // We EXPAND the bbox by 100% in each direction (2x viewport size) so hexagons
+    // near the viewport edge are included — prevents empty areas when panning.
+    // At res <= 9 (city-wide), no bbox needed — response is already small.
+    let bboxParams = '';
+    let bboxHash = 'all';
+    if (h3Resolution >= 10 && viewportBbox) {
+      const { minLat, maxLat, minLng, maxLng } = viewportBbox;
+      // Expand bbox by 150% padding each side
+      const dLat = (parseFloat(maxLat) - parseFloat(minLat)) * 1.5;
+      const dLng = (parseFloat(maxLng) - parseFloat(minLng)) * 1.5;
+      let eLat1 = parseFloat(minLat) - dLat;
+      let eLat2 = parseFloat(maxLat) + dLat;
+      let eLng1 = parseFloat(minLng) - dLng;
+      let eLng2 = parseFloat(maxLng) + dLng;
+
+      // Adaptive minimum bbox per resolution — tuned by benchmark:
+      //   res 10: 0.20° → ~22km, neighbourhood
+      //   res 11: 0.10° → ~11km, street block
+      //   res 12: 0.08° → ~8km,  intersection (~1000 cells)
+      //   res 13: 0.01° → ~1km,  lane level (~4700 cells, 412ms)
+      //   res 14: 0.006°→ ~600m, max detail (~3600 cells, 240ms)
+      const MIN_DEG_BY_RES = {
+        10: 0.20,
+        11: 0.10,
+        12: 0.08,
+        13: 0.010,
+        14: 0.006,
+      };
+      const MIN_DEG = MIN_DEG_BY_RES[h3Resolution] ?? 0.08;
+      const centerLat = (eLat1 + eLat2) / 2;
+      const centerLng = (eLng1 + eLng2) / 2;
+      if ((eLat2 - eLat1) < MIN_DEG) {
+        eLat1 = centerLat - MIN_DEG / 2;
+        eLat2 = centerLat + MIN_DEG / 2;
+      }
+      if ((eLng2 - eLng1) < MIN_DEG) {
+        eLng1 = centerLng - MIN_DEG / 2;
+        eLng2 = centerLng + MIN_DEG / 2;
+      }
+
+      bboxParams = `&min_lat=${eLat1.toFixed(4)}&max_lat=${eLat2.toFixed(4)}&min_lng=${eLng1.toFixed(4)}&max_lng=${eLng2.toFixed(4)}`;
+      // Cache key: viewport bbox at 3dp precision (100m grid)
+      bboxHash = `${minLat}:${maxLat}:${minLng}:${maxLng}`;
+    }
+
+
+    // Cache key: resolution + viewport hash
+    const cacheKey = `${h3Resolution}:${bboxHash}`;
+    if (h3GeoJSONCacheRef.current.has(cacheKey)) {
+      const cached = h3GeoJSONCacheRef.current.get(cacheKey);
+      setH3GeoJSON(cached.h3GeoJSON);
+      return;
+    }
+
+    // Cancel previous in-flight fetch (user zoomed/panned while fetching)
+    if (viewportFetchAbortRef.current) {
+      viewportFetchAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    viewportFetchAbortRef.current = controller;
+
+    const toParam = historyTo || (Date.now() + 86400000);
+    const url = `${apiUrl}/api/h3-aggregate?from=${fromMs}&to=${toParam}&resolution=${h3Resolution}${bboxParams}`;
+
+    // Fetch with exponential-backoff retry (handles backend startup race on npm run start)
+    const fetchWithRetry = async (retries = 3, delayMs = 1000) => {
+      try {
+        const r = await fetch(url, { signal: controller.signal });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        if (!data.cells) return;
+        // Do NOT cache or act on empty results:
+        // An empty response means the expanded bbox happened to have no GPS data.
+        // The user might pan slightly to an area that DOES have data — retrying is correct.
+        // Caching empty would lock out nearby areas sharing the same cache key (100m grid).
+        if (data.cells.length === 0) {
+          // Still clear the current layer so stale hexagons from a previous area don't persist
+          setH3GeoJSON({ type: 'FeatureCollection', features: [] });
+          return; // Don't cache — allow retry on next moveend
+        }
+
+        // Build hexagon polygon from center_lat/lng + cell_size_deg.
+        // Uses the pre-computed HEX_COS/HEX_SIN lookup table (7 angles, flat-top).
+        // ~10ms for 22k cells on main thread — no Worker needed.
+        const features = data.cells.map(cell => {
+          const { center_lat: lat, center_lng: lng, cell_size } = cell;
+          const radius = cell_size / 2;
+          // Longitude scale factor: 1° lng is shorter at higher latitudes
+          const lngScale = 1.0 / Math.cos(lat * Math.PI / 180);
+          const coords = HEX_COS.map((cos, i) => [
+            lng + radius * lngScale * cos,
+            lat + radius * HEX_SIN[i],
+          ]);
+          return {
+            type: 'Feature',
+            geometry: { type: 'Polygon', coordinates: [coords] },
+            properties: {
+              cell:           cell.cell,
+              center_lat:     lat,
+              center_lng:     lng,
+              count:          cell.count,
+              unique_drivers: cell.unique_drivers,
+              avoid_trips:    cell.avoid_trips,
+              total_trips:    cell.total_trips,
+              avg_dev:        cell.avg_dev,
+              max_dev:        cell.max_dev,
+              height:         cell.height,
+              ratio:          cell.ratio,
+            },
+          };
+        });
+
+        const geojson = { type: 'FeatureCollection', features };
+
+        // LRU cache: max 20 entries
+        if (h3GeoJSONCacheRef.current.size >= 20) {
+          const firstKey = h3GeoJSONCacheRef.current.keys().next().value;
+          h3GeoJSONCacheRef.current.delete(firstKey);
+        }
+        h3GeoJSONCacheRef.current.set(cacheKey, { h3GeoJSON: geojson });
+        setH3GeoJSON(geojson);
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        if (retries > 0) {
+          console.info(`[h3-aggregate] retry in ${delayMs}ms (${retries} left)…`);
+          await new Promise(res => setTimeout(res, delayMs));
+          return fetchWithRetry(retries - 1, delayMs * 2);
+        }
+        console.warn('[h3-aggregate] fetch failed after all retries:', err.message);
+      }
+    };
+
+    fetchWithRetry();
+
+    return () => { controller.abort(); };
+  // map is required: without it, if initial h3Resolution===12 AND getBbox() returns null
+  // on first mount, the effect would never fire (map isn't in deps → no re-run on map load).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, h3Resolution, viewportBbox, historyFrom, historyTo, apiUrl, points]);
+
 
   // ── 3D H3 Hexagon Extrusion Grid Layer (~1.5m radius, Res 14) ──────────────
   useEffect(() => {
@@ -822,88 +955,37 @@ export default function HeatmapLayer({
       if (src) src.setData(h3GeoJSON);
     }
 
-    // Toggle visibility and tilt camera for 3D perspective
+    // Only update layer visibility — camera is managed by the dedicated effect below
     if (map.getLayer(layerId)) {
       map.setLayoutProperty(layerId, 'visibility', show3DH3Grid ? 'visible' : 'none');
-      if (show3DH3Grid) {
-        map.easeTo({ pitch: 48, bearing: -18, duration: 1000 });
-      } else if (!showActualPath) {
-        // Only reset camera if actual-path layer is also off
-        map.easeTo({ pitch: 0, bearing: 0, duration: 800 });
-      }
     }
   }, [map, h3GeoJSON, show3DH3Grid]);
 
+  // ── Camera animation — fires ONLY when a toggle changes, NOT on every data fetch ──
+  // Root cause of the snap-back bug: easeTo was inside the h3GeoJSON data effect.
+  // Every pan/zoom updates h3GeoJSON → re-ran the effect → forced bearing back to -18,
+  // overriding any manual rotation the user had done with the mouse.
+  const prev3DH3Ref = useRef(show3DH3Grid);
+  const prevActualPathRef = useRef(showActualPath);
+  useEffect(() => {
+    if (!map) return;
+    const h3Changed = prev3DH3Ref.current !== show3DH3Grid;
+    const apChanged = prevActualPathRef.current !== showActualPath;
+    prev3DH3Ref.current = show3DH3Grid;
+    prevActualPathRef.current = showActualPath;
+    // Skip if only data changed (neither toggle flipped)
+    if (!h3Changed && !apChanged) return;
+    if (show3DH3Grid || showActualPath) {
+      map.easeTo({ pitch: 48, bearing: -18, duration: 1000 });
+    } else {
+      map.easeTo({ pitch: 0, bearing: 0, duration: 800 });
+    }
+  }, [map, show3DH3Grid, showActualPath]);
+
   // ── Actual-path H3 Extrusion Layer ("Hex Tài Xế Đi") ────────────────────────────
-  // Renders H3 extrusion cells dynamically based on the current GPS points,
-  // filtering for trips that deviated from the plan. Zoom-adaptive.
-  const actualPathH3GeoJSON = useMemo(() => {
-    if (!points || points.length === 0) return { type: 'FeatureCollection', features: [] };
-
-    const resLevel = h3Resolution;
-    const h3CellMap = new Map();
-    let maxIntensity = 1;
-
-    for (let i = 0; i < points.length; i++) {
-      const pt = points[i];
-      if (!pt.lat || !pt.lng) continue;
-      // Only process actual deviations to form the purple paths
-      if (!(pt.deviation > 150)) continue;
-
-      const cell = latLngToCell(pt.lat, pt.lng, resLevel);
-      const tripKey = pt.trip_id || (pt.driver_id ? `driver-${pt.driver_id}` : `cluster-${Math.floor(pt.lat * 250)},${Math.floor(pt.lng * 250)}`);
-
-      const item = h3CellMap.get(cell);
-      if (!item) {
-        const dSet = new Set();
-        if (pt.driver_id) dSet.add(pt.driver_id);
-        h3CellMap.set(cell, {
-          h3Index: cell,
-          intensity: 1, // Number of GPS points in this cell
-          uniqueTripsSet: new Set([tripKey]),
-          uniqueDriversSet: dSet,
-        });
-      } else {
-        item.intensity++;
-        item.uniqueTripsSet.add(tripKey);
-        if (pt.driver_id) item.uniqueDriversSet.add(pt.driver_id);
-      }
-    }
-
-    // Compute max intensity (based on unique trips) across all deviation cells
-    let maxTrips = 1;
-    for (const item of h3CellMap.values()) {
-      if (item.uniqueTripsSet.size > maxTrips) {
-        maxTrips = item.uniqueTripsSet.size;
-      }
-    }
-
-    const features = [];
-    for (const item of h3CellMap.values()) {
-      try {
-        const boundary = cellToBoundary(item.h3Index, true);
-        if (!boundary || boundary.length === 0) continue;
-
-        const ratio = maxTrips > 0 ? (item.uniqueTripsSet.size / maxTrips) : 0;
-        const height = Math.max(10, Math.round(ratio * 220));
-
-        features.push({
-          type: 'Feature',
-          geometry: { type: 'Polygon', coordinates: [boundary] },
-          properties: {
-            h3Index: item.h3Index,
-            intensity: item.intensity,
-            uniqueDrivers: item.uniqueDriversSet.size,
-            uniqueTrips: item.uniqueTripsSet.size,
-            ratio: ratio,
-            height: height,
-          },
-        });
-      } catch (_) { }
-    }
-
-    return { type: 'FeatureCollection', features };
-  }, [points, h3Resolution]);
+  // actualPathH3GeoJSON is now computed by the Web Worker (see the dispatch
+  // useEffect above) and stored in the `actualPathH3GeoJSON` state.
+  // This comment block is intentionally left to mark where the useMemo was.
 
   useEffect(() => {
     if (!map) return;
@@ -986,11 +1068,6 @@ export default function HeatmapLayer({
 
       if (map.getLayer(layerId)) {
         map.setLayoutProperty(layerId, 'visibility', showActualPath ? 'visible' : 'none');
-        if (showActualPath) {
-          map.easeTo({ pitch: 48, bearing: -18, duration: 1000 });
-        } else if (!show3DH3Grid) {
-          map.easeTo({ pitch: 0, bearing: 0, duration: 800 });
-        }
       }
     };
 
@@ -1190,6 +1267,11 @@ export default function HeatmapLayer({
   // ── Cleanup ───────────────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
+      // Terminate Web Worker to free thread resources
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
       if (!map || !initialized.current) return;
       if (clickHandler.current) map.off('click', clickHandler.current);
       ['hm-heat', 'hm-hover', 'hm-snapped-dots', 'hm-3d-h3-extrusion',

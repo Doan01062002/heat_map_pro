@@ -18,20 +18,24 @@ import (
 // h3Indexer implements a simplified spatial indexer using a grid-based approach.
 // Each cell is approximately 460m × 460m (similar to H3 Resolution 8).
 type h3Indexer struct {
-	resolution int
+	resolution  int
 	cellSizeDeg float64 // cell size in degrees
 }
 
 // Resolution to approximate cell size mapping (in degrees latitude).
 // H3 Resolution 8 ≈ 460m ≈ 0.00414 degrees
 var resolutionToCellSize = map[int]float64{
-	4:  0.1326,    // ~14.7 km
-	5:  0.0500,    // ~5.6 km
-	6:  0.0189,    // ~2.1 km
-	7:  0.00713,   // ~793 m
-	8:  0.00414,   // ~460 m (default)
-	9:  0.00156,   // ~174 m
-	10: 0.000589,  // ~66 m
+	4:  0.1326,     // ~14.7 km
+	5:  0.0500,     // ~5.6 km
+	6:  0.0189,     // ~2.1 km
+	7:  0.00713,    // ~793 m
+	8:  0.00414,    // ~460 m (default)
+	9:  0.00156,    // ~174 m
+	10: 0.000589,   // ~66 m
+	11: 0.000222,   // ~25 m
+	12: 0.0000838,  // ~9.3 m
+	13: 0.0000316,  // ~3.5 m
+	14: 0.0000119,  // ~1.3 m
 }
 
 // NewH3Indexer creates a new spatial indexer at the given resolution level.
@@ -91,7 +95,49 @@ func (idx *h3Indexer) CellToLatLng(cellIndex string) (lat, lng float64) {
 	return lat, lng
 }
 
+// CellToCenter returns the center point of a cell as [lng, lat] (GeoJSON order).
+func (idx *h3Indexer) CellToCenter(cellIndex string) [2]float64 {
+	lat, lng := idx.CellToLatLng(cellIndex)
+	return [2]float64{lng, lat}
+}
+
+// CellToBoundary returns a hexagon-approximation polygon for a cell, suitable
+// for GeoJSON rendering. Returns coordinates in [lng, lat] order (GeoJSON spec).
+// The polygon is a regular hexagon inscribed in a circle of radius cellSizeDeg/2,
+// with flat-top orientation matching the H3 convention.
+func (idx *h3Indexer) CellToBoundary(cellIndex string) [][2]float64 {
+	lat, lng := idx.CellToLatLng(cellIndex)
+	radius := idx.cellSizeDeg / 2.0
+
+	// Latitude compression: 1° longitude is shorter at higher latitudes
+	lngScale := 1.0
+	if math.Abs(lat) < 89.0 {
+		lngScale = 1.0 / math.Cos(lat*math.Pi/180.0)
+	}
+
+	// 6 vertices of a flat-top regular hexagon
+	points := make([][2]float64, 7)
+	for i := 0; i < 6; i++ {
+		angle := math.Pi/3.0*float64(i) + math.Pi/6.0 // 30° offset for flat-top
+		points[i] = [2]float64{
+			lng + radius*lngScale*math.Cos(angle),
+			lat + radius*math.Sin(angle),
+		}
+	}
+	points[6] = points[0] // close the polygon
+
+	return points
+}
+
 // Resolution returns the configured resolution level.
 func (idx *h3Indexer) Resolution() int {
 	return idx.resolution
 }
+
+// CellSizeDeg returns the cell size in degrees for this resolution.
+// Used by /api/h3-aggregate so the frontend can draw hexagons from center+size
+// without the server having to compute CellToBoundary() for thousands of cells.
+func (idx *h3Indexer) CellSizeDeg() float64 {
+	return idx.cellSizeDeg
+}
+

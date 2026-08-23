@@ -44,6 +44,23 @@ CREATE INDEX IF NOT EXISTS idx_deviation_events_driver_id
 CREATE INDEX IF NOT EXISTS idx_deviation_events_h3_time
     ON deviation_events (h3_index, created_at DESC);
 
+-- BRIN index on created_at: tiny on-disk footprint (~160 pages), very fast
+-- sequential range scans on large tables. Supplements the BTree above.
+CREATE INDEX IF NOT EXISTS idx_dev_events_brin_time
+    ON deviation_events USING BRIN(created_at) WITH (pages_per_range=32);
+
+-- BTree index on deviation_meters DESC: supports
+-- "ORDER BY deviation_meters DESC LIMIT 50000" without full-table sort.
+-- Critical for the /api/points default sampling strategy.
+CREATE INDEX IF NOT EXISTS idx_dev_events_deviation
+    ON deviation_events (deviation_meters DESC);
+
+-- Composite lat/lng index for viewport bbox queries (used at zoom res >= 11).
+-- Enables "WHERE latitude BETWEEN ? AND ? AND longitude BETWEEN ? AND ?" to
+-- return all points in the visible map area for accurate street-level heatmap.
+CREATE INDEX IF NOT EXISTS idx_dev_events_lat_lng
+    ON deviation_events (latitude, longitude);
+
 -- ==============================================================================
 -- Table: trips
 -- ==============================================================================

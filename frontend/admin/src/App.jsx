@@ -4,41 +4,34 @@ import FilterPanel from './components/FilterPanel';
 import StatsOverlay from './components/StatsOverlay';
 import ToastNotification from './components/ToastNotification';
 import { useHeatmapStream } from './hooks/useHeatmapStream';
+import { useProgressiveData } from './hooks/useProgressiveData';
 import { matchTripToRoads, getPlannedRoute, computeH3Overlap } from './utils/osrmRouting';
-
-const PORTO_FROM = 1372636800000; // 2013-07-01
-const PORTO_TO = 1377907200000; // 2013-08-31
 
 export default function App() {
   const [mode, setMode] = useState('history');
 
-  const wsUrl = import.meta.env.VITE_ADMIN_WS_URL || 'ws://localhost:8080/ws/admin';
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+  const wsUrl  = import.meta.env.VITE_ADMIN_WS_URL || 'ws://localhost:8080/ws/admin';
+  const apiUrl = import.meta.env.VITE_API_URL       || 'http://localhost:8080';
 
-  // Live Realtime State
+  // ── Live Realtime State ────────────────────────────────────────────────────
   const [liveTrips, setLiveTrips] = useState([]);
   const [toastNotification, setToastNotification] = useState(null);
 
-  // Handle Realtime New Trip Event from WebSocket
   const handleNewTrip = useCallback((newTrip) => {
-    console.log('[Admin Realtime] New trip received:', newTrip);
     setToastNotification({ id: Date.now(), trip: newTrip });
-
     setLiveTrips((prev) => {
-      const exists = prev.some((t) => t.trip_id === newTrip.trip_id);
-      if (exists) return prev;
+      if (prev.some((t) => t.trip_id === newTrip.trip_id)) return prev;
       return [newTrip, ...prev];
     });
   }, []);
 
-  // Live stream hook
   const { cells: liveCells, stats: liveStats, connectionStatus, clearCells } =
     useHeatmapStream(wsUrl, mode === 'live', handleNewTrip);
 
-  // Fetch initial live trips from backend
+  // Fetch live trips from backend (simulator trips table)
   const fetchLiveTrips = useCallback(async () => {
     try {
-      const res = await fetch(`${apiUrl}/api/trips?limit=50`);
+      const res = await fetch(`${apiUrl}/api/trips?limit=500`);
       if (res.ok) {
         const data = await res.json();
         setLiveTrips(data.trips || []);
@@ -48,20 +41,33 @@ export default function App() {
     }
   }, [apiUrl]);
 
-  useEffect(() => {
-    fetchLiveTrips();
-  }, [fetchLiveTrips]);
+  useEffect(() => { fetchLiveTrips(); }, [fetchLiveTrips]);
 
-  // History data
-  const [historyPoints, setHistoryPoints] = useState([]);
-  const [historyTrips, setHistoryTrips] = useState([]);
-  const [historyTrajectories, setHistoryTrajectories] = useState([]);
-  const [historyStats, setHistoryStats] = useState({ totalPoints: 0, totalTrips: 0 });
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [dateRange, setDateRange] = useState({ from: null, to: null });
+  // ── History Filter State ───────────────────────────────────────────────────
+  // dateRange stores ISO datetime strings from the date-picker.
+  // null means "use the full dataset range provided by the backend".
+  const [dateRange, setDateRange]         = useState({ from: null, to: null });
   const [selectedDriverId, setSelectedDriverId] = useState(null);
-  // Actual-path H3 cells: roads drivers chose when deviating (for "Hex Tài Xế Đi" layer)
-  const [actualPathCells, setActualPathCells] = useState([]);
+  const [selectedTrip, setSelectedTrip]   = useState(null);
+
+  // Derive fromMs / toMs from the date-picker — null means let the backend decide.
+  // This avoids any hardcoded dataset-specific timestamps.
+  const fromMs = dateRange.from ? new Date(dateRange.from).getTime() : null;
+  const toMs   = dateRange.to   ? new Date(dateRange.to).getTime()   : null;
+
+  // ── Progressive Data Loading ───────────────────────────────────────────────
+  const {
+    stats,                          // Phase 1: full counts + actual date range from DB
+    trips, tripsTotal, tripsLoading, tripsComplete,
+    points, pointsLoadedCount, pointsComplete,
+    isInitializing, error: dataError,
+  } = useProgressiveData({
+    apiUrl,
+    fromMs,
+    toMs,
+    driverId: selectedDriverId,
+    enabled: mode === 'history',
+  });
 
   const handleSelectDriver = (driverId) => {
     setSelectedDriverId(driverId);
@@ -72,213 +78,99 @@ export default function App() {
     }
   };
 
-  // Selected trip for route detail
-  const [selectedTrip, setSelectedTrip] = useState(null);
-
-  const fetchHistory = async (fromMs, toMs, driverId = selectedDriverId) => {
-    setHistoryLoading(true);
-    setSelectedTrip(null);
-    try {
-      const fromParam = fromMs || PORTO_FROM;
-      const toParam = (toMs && toMs !== PORTO_TO) ? toMs : Date.now() + 86400000;
-      const driverParam = driverId ? `&driver_id=${encodeURIComponent(driverId)}` : '';
-      const [ptRes, trRes, tripsRes, apRes] = await Promise.all([
-        fetch(`${apiUrl}/api/points?from=${fromParam}&to=${toParam}${driverParam}`),
-        fetch(`${apiUrl}/api/trajectories?from=${fromParam}&to=${toParam}${driverParam}`),
-        fetch(`${apiUrl}/api/trips?limit=100`),
-        fetch(`${apiUrl}/api/actual-path?from=${fromParam}&to=${toParam}${driverParam}`),
-      ]);
-      const ptData = await ptRes.json();
-      const trData = await trRes.json();
-      const dbTripsData = await tripsRes.json();
-      const apData = await apRes.json();
-
-      // Actual-path cells for the "Hex Tài Xế Đi" layer
-      setActualPathCells(apData.cells || []);
-
-      let allPoints = ptData.points || [];
-
-      // Extract GPS points from DB trips actual_route for Heatmap & 3D H3 Grid rendering
-      const dbTrips = dbTripsData.trips || [];
-      dbTrips.forEach((t) => {
-        let route = t.actual_route || t.actual_route_json;
-        if (typeof route === 'string') {
-          try { route = JSON.parse(route); } catch (_) { route = []; }
-        }
-        if (Array.isArray(route) && route.length > 0) {
-          route.forEach(([lng, lat]) => {
-            allPoints.push({
-              lat,
-              lng,
-              deviation: t.is_deviated ? (t.deviation_meters || 250) : 15,
-              trip_id: t.trip_id,
-              driver_id: t.driver_id,
-              created_at: t.created_at,
-            });
-          });
-        }
-      });
-
-      setHistoryPoints(allPoints);
-
-      const features = trData.geojson?.features || [];
-      const trajTrips = features.map(f => ({
-        trip_id: f.properties.trip_id,
-        driver_id: f.properties.driver_id,
-        avg_deviation: f.properties.avg_deviation,
-        point_count: f.properties.point_count,
-        coords: f.geometry.coordinates,
-      }));
-
-      // Combine trajectories with DB saved trips
-      const combinedTrips = [...dbTrips];
-      trajTrips.forEach(tt => {
-        if (!combinedTrips.some(dt => dt.trip_id === tt.trip_id)) {
-          combinedTrips.push(tt);
-        }
-      });
-
-      setHistoryTrips(combinedTrips);
-      setHistoryTrajectories(combinedTrips);
-      setHistoryStats({ totalPoints: allPoints.length, totalTrips: combinedTrips.length });
-    } catch (err) {
-      console.error('History fetch failed:', err);
-    } finally {
-      setHistoryLoading(false);
-    }
-  };
-
-  const [fetchError, setFetchError] = useState(null);
-
-  useEffect(() => {
-    let retries = 0;
-    const tryFetch = async () => {
-      try {
-        await fetchHistory(PORTO_FROM, PORTO_TO, selectedDriverId);
-        setFetchError(null);
-      } catch (err) {
-        if (retries < 3) {
-          retries++;
-          setTimeout(tryFetch, 2000 * retries);
-        } else {
-          setFetchError('Không thể kết nối backend. Hãy refresh trang sau khi backend đã khởi động.');
-        }
-      }
-    };
-    tryFetch();
-  }, []);
-
-  // Refetch when selectedDriverId changes
-  useEffect(() => {
-    if (dateRange.from && dateRange.to) {
-      fetchHistory(new Date(dateRange.from).getTime(), new Date(dateRange.to).getTime(), selectedDriverId);
-    } else {
-      fetchHistory(PORTO_FROM, PORTO_TO, selectedDriverId);
-    }
-  }, [selectedDriverId]);
-
+  // ── Trip Selection ────────────────────────────────────────────────────────
   const handleSelectTrip = async (trip) => {
     if (!trip) { setSelectedTrip(null); return; }
 
-    let actualRoute = trip.actual_route || trip.coords || [];
-    if (typeof actualRoute === 'string') {
-      try { actualRoute = JSON.parse(actualRoute); } catch (_) { actualRoute = []; }
+    // Build coords from trip data — trip comes from /api/trips-summary (deviation_events aggregate)
+    // coords are lat/lng pairs from the GPS path stored in deviation_events
+    const rawCoords = [];
+    if (trip.start_lat && trip.start_lng) {
+      rawCoords.push([trip.start_lng, trip.start_lat]);
     }
 
-    let plannedRoute = trip.waypoints || [];
-    if (typeof plannedRoute === 'string') {
-      try { plannedRoute = JSON.parse(plannedRoute); } catch (_) { plannedRoute = []; }
-    }
-
-    // Fallback if actualRoute missing
-    if ((!actualRoute || actualRoute.length < 2) && plannedRoute.length >= 2) {
-      actualRoute = plannedRoute;
-    }
-
-    if ((!actualRoute || actualRoute.length < 2) && trip.origin && trip.destination) {
-      const origLat = trip.origin.lat || trip.origin.latitude;
-      const origLng = trip.origin.lng || trip.origin.longitude;
-      const destLat = trip.destination.lat || trip.destination.latitude;
-      const destLng = trip.destination.lng || trip.destination.longitude;
-      if (origLat && origLng && destLat && destLng) {
-        actualRoute = [[origLng, origLat], [destLng, destLat]];
-      }
-    }
-
-    const rawCoords = actualRoute;
-
-    // Base state with initial routes
     const base = {
-      trip_id: trip.trip_id,
-      driver_id: trip.driver_id,
-      driver_name: trip.driver_name || trip.driver_id,
-      avg_deviation: trip.avg_deviation || (trip.is_deviated ? 1500 : 0),
-      point_count: trip.point_count || rawCoords.length,
-      coords: rawCoords,
-      matchedRoute: actualRoute.length >= 2 ? actualRoute : null,
-      plannedRoute: plannedRoute.length >= 2 ? plannedRoute : null,
+      trip_id:        trip.trip_id,
+      driver_id:      trip.driver_id,
+      driver_name:    trip.driver_id,
+      avg_deviation:  trip.avg_deviation || 0,
+      point_count:    trip.point_count   || 0,
+      coords:         rawCoords.length >= 2 ? rawCoords : [],
+      matchedRoute:   null,
+      plannedRoute:   null,
       avoidanceRatio: 0,
-      osrmLoading: true,
+      osrmLoading:    rawCoords.length >= 2,
     };
     setSelectedTrip(base);
 
-    if (rawCoords.length >= 2) {
-      try {
-        const startPt = rawCoords[0];
-        const endPt = rawCoords[rawCoords.length - 1];
+    if (rawCoords.length < 2) return;
 
-        // 1. Match actual route to road network
-        const matched = await matchTripToRoads(rawCoords);
-        const finalActual = matched || actualRoute;
+    try {
+      const startPt = rawCoords[0];
+      const endPt   = rawCoords[rawCoords.length - 1];
 
-        // 2. Compute true planned route between ONLY startPt and endPt if plannedRoute isn't detailed
-        let finalPlanned = plannedRoute;
-        if (!finalPlanned || finalPlanned.length < 2) {
-          finalPlanned = await getPlannedRoute([startPt, endPt]);
-        }
-        if (!finalPlanned || finalPlanned.length < 2) {
-          finalPlanned = [startPt, endPt];
-        }
+      const matched = await matchTripToRoads(rawCoords);
+      const finalActual = matched || rawCoords;
 
-        // 3. Compute avoidance ratio using H3 hexagon cell overlap
-        let avoidanceRatio = 0;
-        if (finalActual && finalPlanned) {
-          const { overlapRatio } = computeH3Overlap(finalActual, finalPlanned, 10);
-          avoidanceRatio = Math.max(0, Math.min(100, Math.round((1 - overlapRatio) * 100)));
-        }
+      let finalPlanned = await getPlannedRoute([startPt, endPt]);
+      if (!finalPlanned || finalPlanned.length < 2) finalPlanned = [startPt, endPt];
 
-        setSelectedTrip(prev => prev?.trip_id === trip.trip_id
-          ? {
-            ...prev,
-            matchedRoute: finalActual,
-            plannedRoute: finalPlanned,
-            avoidanceRatio,
-            osrmLoading: false
-          }
-          : prev
-        );
-      } catch (err) {
-        console.warn('OSRM trip lookup failed:', err);
-        setSelectedTrip(prev => prev?.trip_id === trip.trip_id
-          ? { ...prev, osrmLoading: false }
-          : prev
-        );
+      let avoidanceRatio = 0;
+      if (finalActual && finalPlanned) {
+        const { overlapRatio } = computeH3Overlap(finalActual, finalPlanned, 10);
+        avoidanceRatio = Math.max(0, Math.min(100, Math.round((1 - overlapRatio) * 100)));
       }
+
+      setSelectedTrip(prev => prev?.trip_id === trip.trip_id
+        ? { ...prev, matchedRoute: finalActual, plannedRoute: finalPlanned, avoidanceRatio, osrmLoading: false }
+        : prev
+      );
+    } catch (err) {
+      console.warn('OSRM trip lookup failed:', err);
+      setSelectedTrip(prev => prev?.trip_id === trip.trip_id
+        ? { ...prev, osrmLoading: false }
+        : prev
+      );
     }
   };
 
-  const activePoints = mode === 'live' ? [] : historyPoints;
+  // ── Active data slices ────────────────────────────────────────────────────
+  const activePoints = mode === 'live' ? [] : points;
+
+  // Stats overlay: history mode shows data from /api/stats-summary (always accurate).
+  // Live mode shows WebSocket aggregates.
   const activeStats = mode === 'live'
-    ? { totalDrivers: liveStats.totalDrivers, totalDeviations: liveStats.totalDeviations, hotCells: liveCells.length }
-    : { totalDrivers: historyStats.totalTrips, totalDeviations: historyStats.totalPoints, hotCells: historyStats.totalTrips };
+    ? {
+        totalDrivers:   liveStats.totalDrivers    || 0,
+        totalDeviations: liveStats.totalDeviations || 0,
+        hotCells:        liveCells.length,
+      }
+    : {
+        totalDrivers:    stats.totalTrips,     // 9,944 trips (from deviation_events)
+        totalDeviations: stats.totalPoints,    // 386,328 GPS points
+        hotCells:        stats.totalDrivers,   // 411 unique drivers
+        // Progress info (shown in background indicator)
+        pointsLoaded: pointsLoadedCount,
+        tripsLoaded:  trips.length,
+        tripsTotal,
+      };
+
+  // historyFrom / historyTo for the HeatmapLayer (h3-aggregate calls).
+  // Use DB-reported dates when available; fall back to null (backend uses epoch → now).
+  const historyFrom = fromMs ?? stats.dataFromMs;
+  const historyTo   = toMs   ?? stats.dataToMs;
+
+  // Available drivers for the dropdown — derived from loaded trips (grows as pages arrive)
+  const availableDrivers = Array.from(
+    new Set([
+      ...liveTrips.map(t => t.driver_id),
+      ...trips.map(t => t.driver_id),
+    ])
+  ).filter(Boolean).sort();
 
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden', fontFamily: 'Inter, sans-serif', background: '#0a0a1a' }}>
-      {/* Realtime Toast Notification */}
-      <ToastNotification
-        toast={toastNotification}
-        onClose={() => setToastNotification(null)}
-      />
+      <ToastNotification toast={toastNotification} onClose={() => setToastNotification(null)} />
 
       {/* Sidebar */}
       <FilterPanel
@@ -286,11 +178,11 @@ export default function App() {
         onModeChange={m => { setMode(m); if (m === 'live') { clearCells(); setSelectedTrip(null); } }}
         dateRange={dateRange}
         onDateRangeChange={setDateRange}
-        onFetchHistory={(from, to) => fetchHistory(from, to, selectedDriverId)}
-        historyLoading={historyLoading}
+        onFetchHistory={(from, to) => setDateRange({ from: new Date(from).toISOString(), to: new Date(to).toISOString() })}
+        historyLoading={isInitializing}
         connectionStatus={connectionStatus}
-        trips={mode === 'history' ? historyTrips : liveTrips}
-        availableDrivers={Array.from(new Set([...liveTrips, ...historyTrips].map(t => t.driver_id))).filter(Boolean)}
+        trips={mode === 'history' ? trips : liveTrips}
+        availableDrivers={availableDrivers}
         selectedTripId={selectedTrip?.trip_id}
         onSelectTrip={handleSelectTrip}
         selectedDriverId={selectedDriverId}
@@ -302,11 +194,14 @@ export default function App() {
         <MapContainer
           points={activePoints}
           selectedTrip={selectedTrip}
-          actualPathCells={actualPathCells}
+          actualPathCells={[]}
+          historyFrom={historyFrom}
+          historyTo={historyTo}
+          apiUrl={apiUrl}
         />
 
-        {/* Loading overlay */}
-        {historyLoading && (
+        {/* Phase 1 initializing overlay — blocks only until stats are loaded */}
+        {isInitializing && (
           <div style={{
             position: 'absolute', inset: 0,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -317,13 +212,52 @@ export default function App() {
               border: '1px solid rgba(108,99,255,0.3)',
               borderRadius: '16px', padding: '28px 36px', textAlign: 'center', color: '#e0e0ff',
             }}>
-              <div style={{ fontSize: '32px', marginBottom: '12px' }}>⏳</div>
-              <div style={{ fontSize: '16px', fontWeight: 700 }}>Đang tải dữ liệu…</div>
+              <div style={{ fontSize: '32px', marginBottom: '12px' }}>⚡</div>
+              <div style={{ fontSize: '16px', fontWeight: 700 }}>Đang tải thống kê...</div>
+              <div style={{ fontSize: '12px', color: '#888', marginTop: '8px' }}>Heatmap sẽ xuất hiện ngay</div>
             </div>
           </div>
         )}
 
-        {/* Trip detail banner when selected */}
+        {/* Background loading progress indicator — non-blocking, bottom-right */}
+        {mode === 'history' && !isInitializing && (!pointsComplete || !tripsComplete) && (
+          <div style={{
+            position: 'absolute', bottom: '90px', right: '16px',
+            background: 'rgba(10,10,30,0.85)',
+            border: '1px solid rgba(108,99,255,0.2)',
+            borderRadius: '8px', padding: '7px 14px',
+            color: '#888', fontSize: '11px', zIndex: 10,
+            backdropFilter: 'blur(6px)',
+            display: 'flex', flexDirection: 'column', gap: '3px',
+          }}>
+            {!pointsComplete && (
+              <span>
+                🔄 GPS: {pointsLoadedCount.toLocaleString()}
+                {stats.totalPoints > 0 && ` / ${stats.totalPoints.toLocaleString()}`}
+              </span>
+            )}
+            {!tripsComplete && (
+              <span>
+                📋 Trips: {trips.length.toLocaleString()}
+                {tripsTotal > 0 && ` / ${tripsTotal.toLocaleString()}`}
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Error banner */}
+        {dataError && (
+          <div style={{
+            position: 'absolute', top: '16px', left: '50%', transform: 'translateX(-50%)',
+            background: 'rgba(255,60,60,0.15)', border: '1px solid rgba(255,60,60,0.4)',
+            borderRadius: '8px', padding: '10px 20px', color: '#ffaaaa',
+            fontSize: '12px', zIndex: 20,
+          }}>
+            ⚠️ {dataError}
+          </div>
+        )}
+
+        {/* Trip detail banner */}
         {selectedTrip && (
           <div style={{
             position: 'absolute', bottom: '24px', left: '50%',
@@ -354,8 +288,7 @@ export default function App() {
               <div style={{ color: '#555', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Tỷ lệ né tránh</div>
               <div style={{
                 color: selectedTrip.avoidanceRatio > 50 ? '#ff2244' : selectedTrip.avoidanceRatio > 20 ? '#ff8800' : '#4caf50',
-                fontWeight: 700,
-                fontSize: '13px'
+                fontWeight: 700, fontSize: '13px',
               }}>
                 {selectedTrip.osrmLoading ? '…' : `${selectedTrip.avoidanceRatio ?? 0}%`}
               </div>

@@ -9,7 +9,7 @@ import HeatmapLayer from './HeatmapLayer';
 const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 const PORTO_CENTER = [-8.6291, 41.1579];
 
-export default function MapContainer({ points = [], selectedTrip = null, actualPathCells = [] }) {
+export default function MapContainer({ points = [], selectedTrip = null, actualPathCells = [], historyFrom = null, historyTo = null, apiUrl = 'http://localhost:8080' }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -69,6 +69,9 @@ export default function MapContainer({ points = [], selectedTrip = null, actualP
           show3DH3Grid={show3DH3Grid}
           showActualPath={showActualPath}
           actualPathCells={actualPathCells}
+          historyFrom={historyFrom}
+          historyTo={historyTo}
+          apiUrl={apiUrl}
         />
       )}
 
@@ -110,6 +113,8 @@ export default function MapContainer({ points = [], selectedTrip = null, actualP
           }}
         >
           Lưới 3D H3 (~3m) <span style={{ opacity: 0.8, fontSize: '10px' }}>{show3DH3Grid ? 'ON' : 'OFF'}</span>
+
+
         </button>
 
         <button

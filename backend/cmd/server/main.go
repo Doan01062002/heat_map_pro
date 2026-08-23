@@ -138,9 +138,17 @@ func main() {
 		)
 	})
 
-	// Trip saving & retrieval
+	// Trip saving & retrieval (simulator trips table)
 	mux.HandleFunc("POST /api/trips", pgWriter.HandleSaveTrip)
 	mux.HandleFunc("GET /api/trips", pgWriter.HandleGetTrips)
+
+	// Trip summary aggregated from deviation_events (full dataset: ~9,944 trips).
+	// Supports pagination: ?page=N&page_size=200
+	mux.HandleFunc("GET /api/trips-summary", pgWriter.HandleTripsSummaryQuery)
+
+	// Dataset-wide statistics — instant response, no hardcoded dates.
+	// Returns data_from_ms/data_to_ms so frontend derives date range from DB.
+	mux.HandleFunc("GET /api/stats-summary", pgWriter.HandleStatsSummary)
 
 	// Historical heatmap query
 	mux.HandleFunc("GET /api/history", pgWriter.HandleHistoryQuery)
@@ -162,6 +170,10 @@ func main() {
 
 	// Actual-path H3 cells: roads drivers chose when deviating (for "Hex Tài Xế Đi" layer)
 	mux.HandleFunc("GET /api/actual-path", pgWriter.HandleActualPathQuery)
+
+	// Server-side H3 aggregation — 100% data, no sampling, pre-computed polygons.
+	// Replaces the pattern of shipping 386k raw points to the browser for client-side H3.
+	mux.HandleFunc("GET /api/h3-aggregate", pgWriter.HandleH3Aggregate)
 
 	// AI Agent Investigation Proxy
 	mux.HandleFunc("POST /api/ai/investigate", func(w http.ResponseWriter, r *http.Request) {
@@ -203,6 +215,14 @@ func main() {
 	// Gzip compresses JSON responses ~80%, critical for large payloads like
 	// the actual-path endpoint returning 3000+ H3 cells.
 	gzipHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip gzip for WebSocket connections: the browser always sends
+		// "Accept-Encoding: gzip" even on upgrade requests, and wrapping
+		// the ResponseWriter in a gzip.Writer before the WS upgrade causes
+		// a 500 Internal Server Error.
+		if strings.HasPrefix(r.URL.Path, "/ws/") {
+			mux.ServeHTTP(w, r)
+			return
+		}
 		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			mux.ServeHTTP(w, r)
 			return
@@ -235,7 +255,7 @@ func main() {
 		Addr:         addr,
 		Handler:      corsHandler,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		WriteTimeout: 30 * time.Second, // increased: h3-aggregate scans 386k rows
 		IdleTimeout:  60 * time.Second,
 	}
 

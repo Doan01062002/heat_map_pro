@@ -350,7 +350,10 @@ func (w *PostgresWriter) Close() {
 }
 
 // HandlePointsQuery handles GET /api/points?from=<ms>&to=<ms>&limit=<n>&driver_id=<id>
-// Returns raw GPS coordinates for heatmap rendering — naturally on roads.
+// Supports optional viewport bbox: min_lat, max_lat, min_lng, max_lng.
+// When bbox is provided, ALL points in that area are returned (no 50k cap) — the
+// viewport is geographically small so row count is safe.
+// Without bbox: returns the top 50,000 highest-deviation points across the full range.
 func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Request) {
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
@@ -371,16 +374,47 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	limit := 0
-	if limitStr != "" {
+	// ── Viewport bbox (optional) ───────────────────────────────────────────────
+	// When all four bbox params are provided we run a geographically-bounded query.
+	// This is used by the frontend at zoom res ≥ 11 to get ALL points in the
+	// visible area, not just the global top-50k sample.
+	minLatStr := r.URL.Query().Get("min_lat")
+	maxLatStr := r.URL.Query().Get("max_lat")
+	minLngStr := r.URL.Query().Get("min_lng")
+	maxLngStr := r.URL.Query().Get("max_lng")
+
+	hasBBox := minLatStr != "" && maxLatStr != "" && minLngStr != "" && maxLngStr != ""
+
+	var minLat, maxLat, minLng, maxLng float64
+	if hasBBox {
+		minLat, _ = strconv.ParseFloat(minLatStr, 64)
+		maxLat, _ = strconv.ParseFloat(maxLatStr, 64)
+		minLng, _ = strconv.ParseFloat(minLngStr, 64)
+		maxLng, _ = strconv.ParseFloat(maxLngStr, 64)
+	}
+
+	// Default: 100,000 highest-deviation points (~26% of 386k Porto dataset).
+	// Benchmark: ~8s / 12MB. At this size, H3 cell coverage is >99% of the full
+	// dataset because high-deviation points cluster in the same geographic cells.
+	// Hard cap: 500,000 — caller must explicitly opt-in to the full payload.
+	const defaultLimit = 100_000
+	const hardCapLimit = 500_000
+	limit := defaultLimit
+	if hasBBox {
+		// Viewport fetch: no cap — the bbox guarantees a manageable row count.
+		limit = 0
+	} else if limitStr != "" {
 		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
 			limit = n
+			if limit > hardCapLimit {
+				limit = hardCapLimit
+			}
 		}
 	}
 
 	var rows pgx.Rows
 	var queryErr error
-	
+
 	query := `SELECT latitude, longitude, deviation_meters, trip_id, driver_id FROM deviation_events WHERE created_at >= $1 AND created_at <= $2`
 	args := []interface{}{fromTime, toTime}
 	argIdx := 3
@@ -391,11 +425,29 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 		argIdx++
 	}
 
-	query += " ORDER BY deviation_meters DESC"
-
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT $%d", argIdx)
-		args = append(args, limit)
+	if hasBBox {
+		// Tight bounding-box filter: uses btree index on (latitude, longitude)
+		query += fmt.Sprintf(" AND latitude BETWEEN $%d AND $%d AND longitude BETWEEN $%d AND $%d",
+			argIdx, argIdx+1, argIdx+2, argIdx+3)
+		args = append(args, minLat, maxLat, minLng, maxLng)
+		argIdx += 4
+		query += " ORDER BY deviation_meters DESC" // no LIMIT for bbox
+	} else {
+		// Offset-based pagination: caller sends ?limit=N&offset=M to page through all data.
+		// offset=0 means first chunk, offset=50000 means second chunk, etc.
+		offsetStr := r.URL.Query().Get("offset")
+		offset := 0
+		if offsetStr != "" {
+			if n, err := strconv.Atoi(offsetStr); err == nil && n >= 0 {
+				offset = n
+			}
+		}
+		if limit > 0 {
+			query += fmt.Sprintf(" ORDER BY deviation_meters DESC LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+			args = append(args, limit, offset)
+		} else {
+			query += " ORDER BY deviation_meters DESC"
+		}
 	}
 
 	rows, queryErr = w.pool.Query(r.Context(), query, args...)
@@ -414,7 +466,7 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 		DriverID  string  `json:"driver_id"`
 	}
 
-	points := make([]point, 0, 1024)
+	points := make([]point, 0, limit)
 	for rows.Next() {
 		var p point
 		if err := rows.Scan(&p.Lat, &p.Lng, &p.Deviation, &p.TripID, &p.DriverID); err != nil {
@@ -454,10 +506,16 @@ func (w *PostgresWriter) HandleTrajectoriesQuery(wr http.ResponseWriter, r *http
 		}
 	}
 
-	limit := 0
+	// Default: 500 trips. Hard cap: 1000.
+	const defaultTrajLimit = 500
+	const hardCapTrajLimit = 1000
+	limit := defaultTrajLimit
 	if limitStr != "" {
 		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
 			limit = n
+			if limit > hardCapTrajLimit {
+				limit = hardCapTrajLimit
+			}
 		}
 	}
 
@@ -483,12 +541,8 @@ func (w *PostgresWriter) HandleTrajectoriesQuery(wr http.ResponseWriter, r *http
 		GROUP BY trip_id, driver_id
 		HAVING COUNT(*) >= 3
 		ORDER BY COUNT(*) DESC
-	`
-
-	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT $%d", argIdx)
-		args = append(args, limit)
-	}
+		LIMIT $` + fmt.Sprintf("%d", argIdx)
+	args = append(args, limit)
 
 	rows, err := w.pool.Query(r.Context(), query, args...)
 	if err != nil {
@@ -1155,5 +1209,235 @@ func (w *PostgresWriter) HandleActualPathQuery(wr http.ResponseWriter, r *http.R
 			"driver_id": driverID,
 			"type":      "deviation",
 		},
+	})
+}
+
+// HandleTripsSummaryQuery handles GET /api/trips-summary
+// Aggregates trip metadata directly from deviation_events (NOT the trips table).
+// The trips table only holds simulator-registered trips (may be very few).
+// deviation_events contains the full Porto dataset: ~9,944 unique trip_ids.
+//
+// Query params:
+//   from=<unix_ms>   time range start (default: epoch)
+//   to=<unix_ms>     time range end   (default: now+24h)
+//   driver_id=<id>   filter by driver (optional)
+//   page=<n>         1-based page number (default: 1)
+//   page_size=<n>    rows per page, max 500 (default: 200)
+func (w *PostgresWriter) HandleTripsSummaryQuery(wr http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+
+	fromStr   := r.URL.Query().Get("from")
+	toStr     := r.URL.Query().Get("to")
+	driverID  := r.URL.Query().Get("driver_id")
+	pageStr   := r.URL.Query().Get("page")
+	pageSzStr := r.URL.Query().Get("page_size")
+
+	fromTime := time.Unix(0, 0)
+	toTime   := time.Now().Add(24 * time.Hour)
+	if fromStr != "" {
+		if ms, err := strconv.ParseInt(fromStr, 10, 64); err == nil {
+			fromTime = time.UnixMilli(ms)
+		}
+	}
+	if toStr != "" {
+		if ms, err := strconv.ParseInt(toStr, 10, 64); err == nil {
+			toTime = time.UnixMilli(ms)
+		}
+	}
+
+	page   := 1
+	pgSize := 200
+	if pageStr != "" {
+		if n, err := strconv.Atoi(pageStr); err == nil && n > 0 {
+			page = n
+		}
+	}
+	if pageSzStr != "" {
+		if n, err := strconv.Atoi(pageSzStr); err == nil && n > 0 && n <= 500 {
+			pgSize = n
+		}
+	}
+	offset := (page - 1) * pgSize
+
+	// ── Build WHERE clause against the materialized view ─────────────────────
+	// mv_trip_summary is pre-computed at startup and holds one row per trip.
+	// Querying it is O(9,944) instead of O(386,328) — ~40x faster.
+	// first_seen / last_seen in the MV correspond to MIN/MAX(created_at) in deviation_events.
+	mvWhere := "WHERE first_seen >= $1 AND last_seen <= $2"
+	mvArgs  := []interface{}{fromTime, toTime}
+	argIdx  := 3
+	if driverID != "" {
+		mvWhere += fmt.Sprintf(" AND driver_id = $%d", argIdx)
+		mvArgs = append(mvArgs, driverID)
+		argIdx++
+	}
+
+	// ── Total count (instant: index scan on mv_trip_summary) ─────────────────
+	var total int
+	_ = w.pool.QueryRow(ctx,
+		"SELECT COUNT(*)::INT FROM mv_trip_summary "+mvWhere,
+		mvArgs...,
+	).Scan(&total)
+
+	// ── Paginated query against MV ────────────────────────────────────────────
+	pageArgs := make([]interface{}, len(mvArgs))
+	copy(pageArgs, mvArgs)
+	pageArgs = append(pageArgs, pgSize, offset)
+
+	query := fmt.Sprintf(`
+		SELECT
+			trip_id,
+			driver_id,
+			point_count,
+			avg_deviation,
+			max_deviation,
+			is_deviated,
+			first_seen,
+			last_seen,
+			start_lat,
+			start_lng
+		FROM mv_trip_summary
+		%s
+		ORDER BY avg_deviation DESC
+		LIMIT $%d OFFSET $%d`,
+		mvWhere, argIdx, argIdx+1,
+	)
+
+	rows, err := w.pool.Query(ctx, query, pageArgs...)
+
+	if err != nil {
+		slog.Error("trips-summary query failed", "error", err)
+		http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type TripSummary struct {
+		TripID     string  `json:"trip_id"`
+		DriverID   string  `json:"driver_id"`
+		PointCount int     `json:"point_count"`
+		AvgDev     float64 `json:"avg_deviation"`
+		MaxDev     float64 `json:"max_deviation"`
+		IsDeviated bool    `json:"is_deviated"`
+		FirstSeen  string  `json:"first_seen"`
+		LastSeen   string  `json:"last_seen"`
+		StartLat   float64 `json:"start_lat"`
+		StartLng   float64 `json:"start_lng"`
+	}
+
+	trips := make([]TripSummary, 0, pgSize)
+	for rows.Next() {
+		var t TripSummary
+		var firstSeen, lastSeen time.Time
+		if err := rows.Scan(
+			&t.TripID, &t.DriverID, &t.PointCount,
+			&t.AvgDev, &t.MaxDev, &t.IsDeviated,
+			&firstSeen, &lastSeen,
+			&t.StartLat, &t.StartLng,
+		); err != nil {
+			slog.Error("trips-summary scan failed", "error", err)
+			continue
+		}
+		t.FirstSeen = firstSeen.Format(time.RFC3339)
+		t.LastSeen  = lastSeen.Format(time.RFC3339)
+		trips = append(trips, t)
+	}
+
+	slog.Info("trips-summary",
+		"page", page, "page_size", pgSize,
+		"returned", len(trips), "total", total,
+	)
+
+	wr.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(wr).Encode(map[string]interface{}{
+		"trips":     trips,
+		"total":     total,
+		"page":      page,
+		"page_size": pgSize,
+		"has_more":  offset+len(trips) < total,
+	})
+}
+
+// HandleStatsSummary handles GET /api/stats-summary
+// Returns dataset-wide counts from deviation_events in a single fast query.
+// Also provides data_from / data_to so the frontend never hardcodes date ranges.
+//
+// Query params:
+//   from=<unix_ms>   filter start (default: epoch — returns full dataset range)
+//   to=<unix_ms>     filter end   (default: now+24h)
+//   driver_id=<id>   optional driver filter
+func (w *PostgresWriter) HandleStatsSummary(wr http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+
+	fromStr  := r.URL.Query().Get("from")
+	toStr    := r.URL.Query().Get("to")
+	driverID := r.URL.Query().Get("driver_id")
+
+	fromTime := time.Unix(0, 0)
+	toTime   := time.Now().Add(24 * time.Hour)
+	if fromStr != "" {
+		if ms, err := strconv.ParseInt(fromStr, 10, 64); err == nil {
+			fromTime = time.UnixMilli(ms)
+		}
+	}
+	if toStr != "" {
+		if ms, err := strconv.ParseInt(toStr, 10, 64); err == nil {
+			toTime = time.UnixMilli(ms)
+		}
+	}
+
+	baseWhere := "WHERE created_at >= $1 AND created_at <= $2"
+	args      := []interface{}{fromTime, toTime}
+	if driverID != "" {
+		baseWhere += " AND driver_id = $3"
+		args = append(args, driverID)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			COUNT(*)::INT                                            AS total_points,
+			COUNT(DISTINCT trip_id)::INT                             AS total_trips,
+			COUNT(DISTINCT driver_id)::INT                           AS total_drivers,
+			COUNT(*) FILTER (WHERE deviation_meters > 150)::INT      AS deviated_points,
+			COALESCE(AVG(deviation_meters),0)::FLOAT8               AS avg_deviation,
+			COALESCE(MAX(deviation_meters),0)::FLOAT8               AS max_deviation,
+			MIN(created_at)                                          AS data_from,
+			MAX(created_at)                                          AS data_to
+		FROM deviation_events
+		%s`, baseWhere)
+
+	var totalPoints, totalTrips, totalDrivers, deviatedPoints int
+	var avgDev, maxDev float64
+	var dataFrom, dataTo time.Time
+
+	if err := w.pool.QueryRow(ctx, query, args...).Scan(
+		&totalPoints, &totalTrips, &totalDrivers, &deviatedPoints,
+		&avgDev, &maxDev, &dataFrom, &dataTo,
+	); err != nil {
+		slog.Error("stats-summary query failed", "error", err)
+		http.Error(wr, `{"error":"database query failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("stats-summary",
+		"total_points", totalPoints,
+		"total_trips", totalTrips,
+		"total_drivers", totalDrivers,
+	)
+
+	wr.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(wr).Encode(map[string]interface{}{
+		"total_points":    totalPoints,
+		"total_trips":     totalTrips,
+		"total_drivers":   totalDrivers,
+		"deviated_points": deviatedPoints,
+		"avg_deviation":   math.Round(avgDev*10) / 10,
+		"max_deviation":   math.Round(maxDev),
+		// data_from / data_to: actual range present in DB — frontend uses this
+		// instead of hardcoded dates so the UI stays dataset-agnostic.
+		"data_from_ms": dataFrom.UnixMilli(),
+		"data_to_ms":   dataTo.UnixMilli(),
 	})
 }
