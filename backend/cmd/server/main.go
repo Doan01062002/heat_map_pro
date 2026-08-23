@@ -188,7 +188,7 @@ func main() {
 		}
 		proxyReq.Header.Set("Content-Type", "application/json")
 
-		client := &http.Client{Timeout: 30 * time.Second}
+		client := &http.Client{Timeout: 120 * time.Second}
 		resp, err := client.Do(proxyReq)
 		if err != nil {
 			slog.Error("ai agent service call failed", "error", err, "url", aiURL)

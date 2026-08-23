@@ -74,10 +74,12 @@ func NewPostgresWriter(ctx context.Context, cfg *config.Config) (*PostgresWriter
 
 	slog.Info("postgresql connected", "host", cfg.PostgresHost, "db", cfg.PostgresDB)
 
-	return &PostgresWriter{
+	writer := &PostgresWriter{
 		pool:   pool,
 		buffer: make([]DeviationEvent, 0, 1024),
-	}, nil
+	}
+	go writer.BackfillSimulatorDeviations(context.Background())
+	return writer, nil
 }
 
 // Pool returns the underlying pgxpool connection pool.
@@ -349,7 +351,7 @@ func (w *PostgresWriter) Close() {
 	w.pool.Close()
 }
 
-// HandlePointsQuery handles GET /api/points?from=<ms>&to=<ms>&limit=<n>&driver_id=<id>
+// HandlePointsQuery handles GET /api/points?from=<ms>&to=<ms>&limit=<n>&driver_id=<id>&trip_id=<id>
 // Supports optional viewport bbox: min_lat, max_lat, min_lng, max_lng.
 // When bbox is provided, ALL points in that area are returned (no 50k cap) — the
 // viewport is geographically small so row count is safe.
@@ -359,6 +361,7 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 	toStr := r.URL.Query().Get("to")
 	limitStr := r.URL.Query().Get("limit")
 	driverID := r.URL.Query().Get("driver_id")
+	tripID := r.URL.Query().Get("trip_id")
 
 	fromTime := time.Unix(0, 0)
 	toTime := time.Now().Add(24 * time.Hour)
@@ -400,7 +403,10 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 	const defaultLimit = 100_000
 	const hardCapLimit = 500_000
 	limit := defaultLimit
-	if hasBBox {
+	if tripID != "" {
+		// Single-trip fetch: no cap — a trip has at most a few hundred points.
+		limit = 0
+	} else if hasBBox {
 		// Viewport fetch: no cap — the bbox guarantees a manageable row count.
 		limit = 0
 	} else if limitStr != "" {
@@ -425,7 +431,11 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 		argIdx++
 	}
 
-	if hasBBox {
+	if tripID != "" {
+		// Single-trip fetch: filter by trip_id, return ALL points ordered by time.
+		query += fmt.Sprintf(" AND trip_id = $%d ORDER BY created_at ASC", argIdx)
+		args = append(args, tripID)
+	} else if hasBBox {
 		// Tight bounding-box filter: uses btree index on (latitude, longitude)
 		query += fmt.Sprintf(" AND latitude BETWEEN $%d AND $%d AND longitude BETWEEN $%d AND $%d",
 			argIdx, argIdx+1, argIdx+2, argIdx+3)
@@ -434,7 +444,6 @@ func (w *PostgresWriter) HandlePointsQuery(wr http.ResponseWriter, r *http.Reque
 		query += " ORDER BY deviation_meters DESC" // no LIMIT for bbox
 	} else {
 		// Offset-based pagination: caller sends ?limit=N&offset=M to page through all data.
-		// offset=0 means first chunk, offset=50000 means second chunk, etc.
 		offsetStr := r.URL.Query().Get("offset")
 		offset := 0
 		if offsetStr != "" {
@@ -805,11 +814,22 @@ func (w *PostgresWriter) HandleSaveTrip(wr http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	// Fallback between waypoints and planned_route
+	if len(req.PlannedRouteJSON) == 0 || string(req.PlannedRouteJSON) == "[]" || string(req.PlannedRouteJSON) == "null" {
+		req.PlannedRouteJSON = req.WaypointsJSON
+	}
+	if len(req.WaypointsJSON) == 0 || string(req.WaypointsJSON) == "[]" || string(req.WaypointsJSON) == "null" {
+		req.WaypointsJSON = req.PlannedRouteJSON
+	}
+
 	// ── Compute deviation_ratio: fraction of actual route > 50m from planned ─
 	var actualCoords [][2]float64
 	var plannedCoords [][2]float64
 	_ = json.Unmarshal(req.ActualRouteJSON, &actualCoords)
 	_ = json.Unmarshal(req.PlannedRouteJSON, &plannedCoords)
+	if len(plannedCoords) == 0 {
+		_ = json.Unmarshal(req.WaypointsJSON, &plannedCoords)
+	}
 
 	deviationRatio := 0.0
 	if len(plannedCoords) > 0 && len(actualCoords) > 0 {
@@ -822,7 +842,7 @@ func (w *PostgresWriter) HandleSaveTrip(wr http.ResponseWriter, r *http.Request)
 					minDist = d
 				}
 			}
-			if minDist > 50.0 {
+			if minDist > 25.0 {
 				offRouteCount++
 			}
 		}
@@ -1095,6 +1115,66 @@ func pointSegDistM(p, a, b [2]float64) float64 {
 	ex := px - t*dx
 	ey := py - t*dy
 	return math.Sqrt(ex*ex + ey*ey)
+}
+
+// BackfillSimulatorDeviations updates deviation_meters in deviation_events for trips that have waypoints_json and actual_route_json.
+func (w *PostgresWriter) BackfillSimulatorDeviations(ctx context.Context) {
+	rows, err := w.pool.Query(ctx, `
+		SELECT trip_id, waypoints_json, actual_route_json
+		FROM trips
+		WHERE actual_route_json IS NOT NULL
+		  AND actual_route_json::text != '[]'
+		  AND actual_route_json::text != 'null'
+	`)
+	if err != nil {
+		slog.Warn("backfill: failed to query trips", "error", err)
+		return
+	}
+	defer rows.Close()
+
+	type tripData struct {
+		tripID string
+		actual [][2]float64
+		plan   [][2]float64
+	}
+
+	var tripsToFix []tripData
+	for rows.Next() {
+		var tripID string
+		var waypointsJSON, actualJSON []byte
+		if err := rows.Scan(&tripID, &waypointsJSON, &actualJSON); err != nil {
+			continue
+		}
+		var actual, plan [][2]float64
+		_ = json.Unmarshal(actualJSON, &actual)
+		_ = json.Unmarshal(waypointsJSON, &plan)
+		if len(actual) > 0 && len(plan) > 1 {
+			tripsToFix = append(tripsToFix, tripData{
+				tripID: tripID,
+				actual: actual,
+				plan:   plan,
+			})
+		}
+	}
+
+	for _, td := range tripsToFix {
+		for _, ap := range td.actual {
+			lng, lat := ap[0], ap[1]
+			minD := math.MaxFloat64
+			for j := 0; j < len(td.plan)-1; j++ {
+				d := pointSegDistM(ap, td.plan[j], td.plan[j+1])
+				if d < minD {
+					minD = d
+				}
+			}
+			_, _ = w.pool.Exec(ctx, `
+				UPDATE deviation_events
+				SET deviation_meters = $1
+				WHERE trip_id = $2 AND ABS(latitude - $3) < 0.0001 AND ABS(longitude - $4) < 0.0001
+			`, minD, td.tripID, lat, lng)
+		}
+	}
+	slog.Info("backfilled simulator deviations", "trips", len(tripsToFix))
 }
 
 // ── HandleActualPathQuery ──────────────────────────────────────────────────────

@@ -111,6 +111,73 @@ export function computeH3Overlap(actualCoords, plannedCoords, resolution = 10) {
   return { overlapRatio, actualCells, plannedCells };
 }
 
+/**
+ * computeAvoidanceRatio — Distance-based avoidance metric.
+ * Measures what % of the actual route length is more than `thresholdM` metres
+ * away from the nearest segment of the planned route.
+ *
+ * Much more accurate than H3 overlap for short trips (< 2 km) where
+ * H3-10 cells (~65m) are too large to distinguish detours.
+ *
+ * @param {Array<[number,number]>} actualCoords   [lng,lat][]
+ * @param {Array<[number,number]>} plannedCoords  [lng,lat][]
+ * @param {number} thresholdM  distance threshold in metres (default 25)
+ * @returns {number}  avoidance ratio 0–100 (integer %)
+ */
+export function computeAvoidanceRatio(actualCoords, plannedCoords, thresholdM = 25) {
+  if (!actualCoords?.length || !plannedCoords?.length) return 0;
+
+  // Convert degrees to approximate metres (1° ≈ 111,320m at equator)
+  const DEG_TO_M = 111320;
+
+  // Minimum distance (metres) from point p to any segment of route
+  function minDistToRoute(p, route) {
+    let min = Infinity;
+    for (let i = 0; i < route.length - 1; i++) {
+      const a = route[i], b = route[i + 1];
+      const dx = (b[0] - a[0]) * DEG_TO_M * Math.cos(p[1] * Math.PI / 180);
+      const dy = (b[1] - a[1]) * DEG_TO_M;
+      const len2 = dx * dx + dy * dy;
+      let t = 0;
+      if (len2 > 0) {
+        const px = (p[0] - a[0]) * DEG_TO_M * Math.cos(p[1] * Math.PI / 180);
+        const py = (p[1] - a[1]) * DEG_TO_M;
+        t = Math.max(0, Math.min(1, (px * dx + py * dy) / len2));
+      }
+      const ex = (p[0] - a[0]) * DEG_TO_M * Math.cos(p[1] * Math.PI / 180) - t * dx;
+      const ey = (p[1] - a[1]) * DEG_TO_M - t * dy;
+      const d = Math.sqrt(ex * ex + ey * ey);
+      if (d < min) min = d;
+    }
+    return min;
+  }
+
+  // Sample the actual path every ~5m and check distance to planned route
+  const STEP_M = 5;
+  let totalSamples = 0, deviatedSamples = 0;
+
+  for (let i = 0; i < actualCoords.length - 1; i++) {
+    const a = actualCoords[i], b = actualCoords[i + 1];
+    const dx = (b[0] - a[0]) * DEG_TO_M * Math.cos(a[1] * Math.PI / 180);
+    const dy = (b[1] - a[1]) * DEG_TO_M;
+    const segLen = Math.sqrt(dx * dx + dy * dy);
+    if (segLen < 0.1) continue;
+
+    const steps = Math.max(1, Math.ceil(segLen / STEP_M));
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      const pt = [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+      const dist = minDistToRoute(pt, plannedCoords);
+      totalSamples++;
+      if (dist > thresholdM) deviatedSamples++;
+    }
+  }
+
+  if (totalSamples === 0) return 0;
+  return Math.round((deviatedSamples / totalSamples) * 100);
+}
+
+
 
 /**
  * calcBearing — Compute the compass bearing from point A to point B.

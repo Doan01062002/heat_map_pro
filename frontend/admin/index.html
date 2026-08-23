@@ -55,6 +55,15 @@
       .custom-thin-scroll::-webkit-scrollbar-thumb:hover {
         background: rgba(108, 99, 255, 0.8) !important;
       }
+      /* Allow tall popups to scroll instead of being cut off */
+      .maplibregl-popup {
+        max-height: 90vh;
+      }
+      .maplibregl-popup-content {
+        max-height: 85vh;
+        overflow-y: auto;
+        padding: 10px 12px !important;
+      }
     </style>
   </head>
   <body>

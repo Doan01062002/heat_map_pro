@@ -210,7 +210,7 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps, points = []) {
     new PopupClass({ offset: 12, maxWidth: '315px', closeButton: true })
       .setLngLat(popupLngLat)
       .setHTML(`
-        <div class="custom-thin-scroll" style="font-family:Inter,system-ui,sans-serif;font-size:12px;color:#111;line-height:1.75;max-height:68vh;overflow-y:auto;padding-right:2px">
+        <div class="custom-thin-scroll" style="font-family:Inter,system-ui,sans-serif;font-size:12px;color:#111;line-height:1.75;max-height:80vh;overflow-y:auto;padding-right:2px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
             <div style="font-weight:800;font-size:13.5px;color:#1b5e20">
               🛑 Ô 3D H3 (Res ${f.res || 14} · ${H3_RES_SIZE[f.res] || '~1m'})
@@ -302,8 +302,18 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps, points = []) {
                 lng: centerLng,
                 time_window_minutes: 60,
                 timestamp_ms: targetTimeMs,
+                // Pass exact bbox matching road-stats query → AI uses same data scope as popup
+                min_lat: minLat,
+                max_lat: maxLat,
+                min_lng: minLng,
+                max_lng: maxLng,
+                // Live session stats shown in popup (primary source of truth for AI)
+                session_drivers: drivers,
+                session_trips: totalTrips,
+                session_high_dev_trips: highDevTrips,
+                session_deviation_ratio: avoidRatio / 100, // convert % → 0-1 ratio
+                session_avg_deviation_m: avgDev,
                 // Pass the far edge of the H3 cell as the approximate trip end point
-                // so OSRM can analyze a meaningful directional route instead of a fixed NE offset
                 end_lat: maxLat || (centerLat + 0.003),
                 end_lng: maxLng || centerLng,
               }),
@@ -324,51 +334,63 @@ async function show3DH3CellPopup(map, popupLngLat, cellProps, points = []) {
               });
             }
 
-            const riskBg = data.risk_level === 'SAFE_FORCE_MAJEURE' ? '#e8f5e9' : data.risk_level === 'SUSPICIOUS' ? '#fff8e1' : '#ffebee';
-            const riskColor = data.risk_level === 'SAFE_FORCE_MAJEURE' ? '#2e7d32' : data.risk_level === 'SUSPICIOUS' ? '#f57f17' : '#c62828';
-            const riskLabel = data.risk_level === 'SAFE_FORCE_MAJEURE' ? '🟢 BẤT KHẢ KHÁNG (An toàn)' : data.risk_level === 'SUSPICIOUS' ? '🟡 CẦN THEO DÕI' : '🔴 CẢNH BÁO GIAN LẬN';
+            const riskBg = data.risk_level === 'SAFE_FORCE_MAJEURE' ? '#e8f5e9' : data.risk_level === 'SUSPICIOUS' ? '#fffde7' : '#fce4ec';
+            const riskColor = data.risk_level === 'SAFE_FORCE_MAJEURE' ? '#2e7d32' : data.risk_level === 'SUSPICIOUS' ? '#e65100' : '#c62828';
+            const riskIcon = data.risk_level === 'SAFE_FORCE_MAJEURE' ? '🟢' : data.risk_level === 'SUSPICIOUS' ? '🟡' : '🔴';
+            const riskLabel = data.risk_level === 'SAFE_FORCE_MAJEURE' ? 'Có nguyên nhân khách quan' : data.risk_level === 'SUSPICIOUS' ? 'Cần theo dõi thêm' : 'Bất thường cao';
 
-            const timeLabel = data.evidence?.weather?.weather_time ? `🕒 Mốc thời gian: <b>${data.evidence.weather.weather_time}</b>` : '';
-            const weatherStr = data.evidence?.weather ? `🌡️ ${data.evidence.weather.temperature ?? 'N/A'}°C · 🌧️ ${data.evidence.weather.rain_mm ?? 0}mm/h (${data.evidence.weather.description})` : 'Thời tiết: Không khả dụng';
             const locationStr = data.evidence?.location_name || '';
+            const confPct = (data.confidence * 100).toFixed(0);
 
-            const osrmSummary = data.evidence?.osrm_alternatives?.summary || 'Không có dữ liệu lộ trình';
-            const osrmClass = data.evidence?.osrm_alternatives?.route_classification === 'OPTIMIZED_SHORTCUT' ? '🟢 Đường tắt tối ưu'
-              : data.evidence?.osrm_alternatives?.route_classification === 'INFLATED_DETOUR' ? '🔴 Rẽ lòng vòng'
-                : data.evidence?.osrm_alternatives?.route_classification === 'OSRM_UNAVAILABLE' ? '⚪ Không kết nối OSRM'
-                  : '🔵 Lộ trình chuẩn';
+            // Use new structured fields, fallback to legacy summary if observation is empty
+            const observation = data.observation || data.summary || '';
+            const context = data.context || '';
+            const conclusion = data.conclusion || data.recommendation || '';
 
-            const driverRep = data.evidence?.driver_profile ? `👤 Uy tín khu vực: <b>${(data.evidence.driver_profile.compliance_rate_30d * 100).toFixed(1)}% chuẩn tuyến</b> (${data.evidence.driver_profile.reputation_level})` : '';
+            // Compact environment badges
+            const weather = data.evidence?.weather;
+            const traffic = data.evidence?.traffic_speed;
+            const telemetry = data.evidence?.fleet_telemetry;
 
-            const trafficState = data.evidence?.traffic_speed ? `🚦 Giao thông: <b>${data.evidence.traffic_speed.traffic_state === 'SEVERE_GRIDLOCK' ? '🔴 Kẹt xe nghiêm trọng' : data.evidence.traffic_speed.traffic_state === 'MODERATE_SLOW' ? '🟡 Chậm cục bộ' : '🟢 Thông thoáng'}</b> (${data.evidence.traffic_speed.current_speed_kmh}/${data.evidence.traffic_speed.baseline_speed_kmh} km/h)` : '';
-
-            let newsHtml = '';
-            if (data.evidence?.news && data.evidence.news.length > 0) {
-              newsHtml = `
-                <div style="margin-top:6px;padding-top:6px;border-top:1px dashed #ccc">
-                  <div style="font-weight:700;color:#1565c0;margin-bottom:2px">📰 Tin tức sự kiện:</div>
-                  ${data.evidence.news.map(n => `<div style="margin-bottom:3px"><b>• ${n.title}</b> <span style="color:#888">(${n.source})</span></div>`).join('')}
-                </div>
-              `;
+            let envBadges = '';
+            if (weather) {
+              const weatherIcon = (weather.rain_mm || 0) >= 5 ? '🌧️' : '☀️';
+              envBadges += `<span style="background:#f5f5f5;padding:2px 6px;border-radius:4px;font-size:10px;color:#555">${weatherIcon} ${weather.temperature ?? ''}°C · ${weather.rain_mm ?? 0}mm/h</span> `;
+            }
+            if (traffic) {
+              const tIcon = traffic.traffic_state === 'SEVERE_GRIDLOCK' ? '🔴' : traffic.traffic_state === 'MODERATE_SLOW' ? '🟡' : '🟢';
+              envBadges += `<span style="background:#f5f5f5;padding:2px 6px;border-radius:4px;font-size:10px;color:#555">${tIcon} ${traffic.current_speed_kmh}/${traffic.baseline_speed_kmh} km/h</span> `;
+            }
+            if (telemetry) {
+              envBadges += `<span style="background:#f5f5f5;padding:2px 6px;border-radius:4px;font-size:10px;color:#555">👥 ${telemetry.unique_drivers} tài xế · ${telemetry.unique_trips} chuyến</span>`;
             }
 
             box.innerHTML = `
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-                <span style="background:${riskBg};color:${riskColor};padding:2px 8px;border-radius:10px;font-weight:700;font-size:10.5px">${riskLabel}</span>
-                <span style="color:#666;font-size:10px">Độ tin cậy: ${(data.confidence * 100).toFixed(0)}%</span>
+              <div style="border-left:3px solid ${riskColor};padding-left:10px">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                  <span style="background:${riskBg};color:${riskColor};padding:3px 10px;border-radius:12px;font-weight:700;font-size:11px">${riskIcon} ${riskLabel}</span>
+                  <span style="color:#999;font-size:9.5px">Độ tin cậy ${confPct}%</span>
+                </div>
+
+                ${locationStr ? `<div style="color:#1a237e;font-weight:600;font-size:11px;margin-bottom:8px">📍 ${locationStr}</div>` : ''}
+
+                <div style="margin-bottom:8px">
+                  <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Hiện tượng</div>
+                  <div style="color:#222;font-size:11.5px;line-height:1.5">${observation}</div>
+                </div>
+
+                <div style="margin-bottom:8px">
+                  <div style="color:#888;font-size:9px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px">Bối cảnh</div>
+                  <div style="color:#222;font-size:11.5px;line-height:1.5">${context}</div>
+                </div>
+
+                <div style="background:${riskBg};padding:8px 10px;border-radius:6px;margin-bottom:6px">
+                  <div style="color:${riskColor};font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px">Kết luận</div>
+                  <div style="color:#222;font-size:11.5px;line-height:1.5">${conclusion}</div>
+                </div>
+
+                <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px">${envBadges}</div>
               </div>
-              <div style="font-weight:700;color:#1a237e;margin-bottom:4px;font-size:11.5px">📍 ${locationStr}</div>
-              <div style="color:#333;margin-bottom:6px;line-height:1.4"><b>🧠 Chẩn đoán:</b> ${data.summary}</div>
-              <div style="background:#fff;padding:6px;border-radius:6px;border:1px solid #e0e0e0;margin-bottom:6px;color:#555">
-                ${timeLabel ? `<div style="color:#1565c0;margin-bottom:3px">${timeLabel}</div>` : ''}
-                <div>${weatherStr}</div>
-                <div>📊 Đội xe cùng rẽ: <b>${((data.evidence?.fleet_telemetry?.fleet_deviation_ratio || 0) * 100).toFixed(1)}%</b></div>
-                <div style="margin-top:3px">🔀 OSRM: <b>${osrmClass}</b> (${osrmSummary})</div>
-                ${driverRep ? `<div style="margin-top:3px">${driverRep}</div>` : ''}
-                ${trafficState ? `<div style="margin-top:3px">${trafficState}</div>` : ''}
-                ${newsHtml}
-              </div>
-              <div style="color:#2e7d32;font-weight:600;font-size:10.5px">💡 Đề xuất: ${data.recommendation}</div>
             `;
 
             setTimeout(() => {
@@ -957,9 +979,11 @@ export default function HeatmapLayer({
 
     // Only update layer visibility — camera is managed by the dedicated effect below
     if (map.getLayer(layerId)) {
-      map.setLayoutProperty(layerId, 'visibility', show3DH3Grid ? 'visible' : 'none');
+      const shouldShow = show3DH3Grid;
+      map.setLayoutProperty(layerId, 'visibility', shouldShow ? 'visible' : 'none');
     }
   }, [map, h3GeoJSON, show3DH3Grid]);
+
 
   // ── Camera animation — fires ONLY when a toggle changes, NOT on every data fetch ──
   // Root cause of the snap-back bug: easeTo was inside the h3GeoJSON data effect.

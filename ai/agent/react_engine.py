@@ -21,7 +21,11 @@ async def run_investigation(req: InvestigateRequest) -> DiagnosisResult:
 
     # Step 1: Concurrently gather initial telemetry, weather, and geocode
     telemetry, weather, location_name = await asyncio.gather(
-        query_telemetry(req.h3_index, req.lat, req.lng, req.time_window_minutes, req.timestamp_ms),
+        query_telemetry(
+            req.h3_index, req.lat, req.lng, req.time_window_minutes, req.timestamp_ms,
+            bbox_min_lat=req.min_lat, bbox_max_lat=req.max_lat,
+            bbox_min_lng=req.min_lng, bbox_max_lng=req.max_lng,
+        ),
         fetch_weather(req.lat, req.lng, req.timestamp_ms),
         reverse_geocode(req.lat, req.lng),
     )
@@ -57,6 +61,36 @@ async def run_investigation(req: InvestigateRequest) -> DiagnosisResult:
     if req.timestamp_ms and req.timestamp_ms > 0:
         dt = datetime.fromtimestamp(req.timestamp_ms / 1000.0, tz=timezone.utc)
         target_time_str = dt.strftime("%Y-%m-%d %H:%M UTC")
+
+    # If frontend provided live session stats (the numbers shown in popup), override DB telemetry.
+    # Session stats = current monitoring window; DB telemetry = full history. Popup shows session stats.
+    if req.session_trips is not None and req.session_trips > 0:
+        session_high_dev = req.session_high_dev_trips or 0
+        # Always compute ratio from actual counts for accuracy — ignore incoming ratio if unreliable
+        if req.session_trips > 0:
+            computed_ratio = session_high_dev / req.session_trips
+        else:
+            computed_ratio = 0.0
+        # Accept incoming ratio only if it's in 0-1 range; otherwise use computed
+        incoming = req.session_deviation_ratio or 0.0
+        if incoming > 1.0:
+            incoming = incoming / 100.0  # frontend sent percent, normalize
+        session_ratio = incoming if incoming > 0 else computed_ratio
+
+        from tools.db_telemetry import compute_bayesian_smoothed_ratio, compute_wilson_interval, _build_telemetry
+        adj = compute_bayesian_smoothed_ratio(session_high_dev, req.session_trips)
+        lo, hi, margin = compute_wilson_interval(session_high_dev, req.session_trips)
+        telemetry = telemetry.model_copy(update={
+            "unique_drivers": req.session_drivers or telemetry.unique_drivers,
+            "unique_trips": req.session_trips,
+            "high_dev_trips": session_high_dev,
+            "fleet_deviation_ratio": round(session_ratio, 3),
+            "adjusted_deviation_ratio": adj,
+            "wilson_lower_bound": lo,
+            "wilson_upper_bound": hi,
+            "margin_of_error": margin,
+            "avg_deviation_m": req.session_avg_deviation_m or telemetry.avg_deviation_m,
+        })
 
     # Step 4: Bundle all evidence
     evidence = Evidence(

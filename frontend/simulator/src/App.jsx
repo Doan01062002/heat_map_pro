@@ -120,17 +120,54 @@ export default function App() {
     setIsMatching(true);
 
     let ptsToMatch = [...actualRouteCoords];
-    if (origin && (ptsToMatch[0][0] !== origin.lng || ptsToMatch[0][1] !== origin.lat)) {
-      ptsToMatch.unshift([origin.lng, origin.lat]);
+
+    // Helper: rough distance in metres between two [lng, lat] points
+    const distM = (a, b) => {
+      const dx = (b[0] - a[0]) * 111320 * Math.cos(a[1] * Math.PI / 180);
+      const dy = (b[1] - a[1]) * 111320;
+      return Math.sqrt(dx * dx + dy * dy);
+    };
+
+    // Prepend origin if first drawn point is > 5m away
+    if (origin) {
+      const originPt = [origin.lng, origin.lat];
+      if (distM(ptsToMatch[0], originPt) > 5) {
+        ptsToMatch.unshift(originPt);
+      }
     }
-    if (destination && (ptsToMatch[ptsToMatch.length - 1][0] !== destination.lng || ptsToMatch[ptsToMatch.length - 1][1] !== destination.lat)) {
-      ptsToMatch.push([destination.lng, destination.lat]);
+
+    // Append destination: if last drawn point is close (< 80m), REPLACE it
+    // to avoid a short off-road stub at the end.
+    if (destination) {
+      const destPt = [destination.lng, destination.lat];
+      const lastPt = ptsToMatch[ptsToMatch.length - 1];
+      if (distM(lastPt, destPt) < 80) {
+        // Replace the last point with the exact destination
+        ptsToMatch[ptsToMatch.length - 1] = destPt;
+      } else if (distM(lastPt, destPt) > 5) {
+        // Far away: append
+        ptsToMatch.push(destPt);
+      }
     }
 
     const snappedCoords = await matchRouteOSRM(ptsToMatch);
     setActualRouteCoords(snappedCoords);
+
+    // ── Align origin/destination markers with snapped route endpoints ──────────
+    // After OSRM match, actualRouteCoords[0] may differ slightly from origin.
+    // Update the markers so they sit exactly where the route line starts/ends.
+    if (snappedCoords.length >= 2) {
+      const [startLng, startLat] = snappedCoords[0];
+      const [endLng, endLat]     = snappedCoords[snappedCoords.length - 1];
+      if (origin)      setOrigin(prev      => ({ ...prev, lng: startLng, lat: startLat }));
+      if (destination) setDestination(prev => ({ ...prev, lng: endLng,   lat: endLat   }));
+    }
+    // ──────────────────────────────────────────────────────────────────────────
+
     setIsMatching(false);
   };
+
+
 
   const handleClearActualRoute = () => {
     if (reviewingTrip) return;
@@ -183,6 +220,7 @@ export default function App() {
       origin,
       destination,
       waypoints: planWaypoints.length >= 2 ? planWaypoints : [[origin.lng, origin.lat], [destination.lng, destination.lat]],
+      planned_route: planWaypoints.length >= 2 ? planWaypoints : [[origin.lng, origin.lat], [destination.lng, destination.lat]],
       actual_route: coordsToSimulate,
       distance_km: parseFloat(routeInfo?.distanceKm || 0),
       duration_min: routeInfo?.durationMin || 0,

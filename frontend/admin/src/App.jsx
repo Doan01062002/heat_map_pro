@@ -5,7 +5,7 @@ import StatsOverlay from './components/StatsOverlay';
 import ToastNotification from './components/ToastNotification';
 import { useHeatmapStream } from './hooks/useHeatmapStream';
 import { useProgressiveData } from './hooks/useProgressiveData';
-import { matchTripToRoads, getPlannedRoute, computeH3Overlap } from './utils/osrmRouting';
+import { matchTripToRoads, getPlannedRoute, computeH3Overlap, computeAvoidanceRatio } from './utils/osrmRouting';
 
 export default function App() {
   const [mode, setMode] = useState('history');
@@ -82,57 +82,108 @@ export default function App() {
   const handleSelectTrip = async (trip) => {
     if (!trip) { setSelectedTrip(null); return; }
 
-    // Build coords from trip data — trip comes from /api/trips-summary (deviation_events aggregate)
-    // coords are lat/lng pairs from the GPS path stored in deviation_events
-    const rawCoords = [];
-    if (trip.start_lat && trip.start_lng) {
-      rawCoords.push([trip.start_lng, trip.start_lat]);
-    }
-
+    // Show loading state immediately
     const base = {
       trip_id:        trip.trip_id,
       driver_id:      trip.driver_id,
-      driver_name:    trip.driver_id,
+      driver_name:    trip.driver_name || trip.driver_id,
       avg_deviation:  trip.avg_deviation || 0,
       point_count:    trip.point_count   || 0,
-      coords:         rawCoords.length >= 2 ? rawCoords : [],
+      // Simulator-specific fields (null for Porto historical)
+      distance_km:    trip.distance_km   ?? null,
+      is_deviated:    trip.is_deviated   ?? null,
+      coords:         [],
       matchedRoute:   null,
       plannedRoute:   null,
       avoidanceRatio: 0,
-      osrmLoading:    rawCoords.length >= 2,
+      osrmLoading:    true,
     };
+
     setSelectedTrip(base);
 
-    if (rawCoords.length < 2) return;
-
     try {
-      const startPt = rawCoords[0];
-      const endPt   = rawCoords[rawCoords.length - 1];
+      let rawCoords = [];
+      let finalActual = null;
+      let finalPlanned = null;
 
-      const matched = await matchTripToRoads(rawCoords);
-      const finalActual = matched || rawCoords;
+      // ── Simulator trip (from /api/trips): has waypoints + actual_route embedded ──
+      // Waypoints = GPS drawn path, actual_route = OSRM-matched path
+      // Format: [[lng, lat], ...] arrays (already parsed by Go JSON)
+      if (trip.waypoints && trip.waypoints.length >= 2) {
+        // GPS drawn path — use as raw coords
+        rawCoords = trip.waypoints.filter(c => Array.isArray(c) && c.length === 2);
 
-      let finalPlanned = await getPlannedRoute([startPt, endPt]);
-      if (!finalPlanned || finalPlanned.length < 2) finalPlanned = [startPt, endPt];
+        // actual_route from simulator is already OSRM-matched
+        if (trip.actual_route && trip.actual_route.length >= 2) {
+          finalActual = trip.actual_route.filter(c => Array.isArray(c) && c.length === 2);
+        } else {
+          finalActual = rawCoords;
+        }
+
+        // Planned route: origin → destination via OSRM
+        const startPt = rawCoords[0];
+        const endPt   = rawCoords[rawCoords.length - 1];
+        finalPlanned = await getPlannedRoute([startPt, endPt]);
+        if (!finalPlanned || finalPlanned.length < 2) finalPlanned = [startPt, endPt];
+
+      } else {
+        // ── Porto historical trip (from /api/trips-summary): fetch GPS from deviation_events ──
+        const fromMs = trip.first_seen ? new Date(trip.first_seen).getTime() - 60000 : 0;
+        const toMs   = trip.last_seen  ? new Date(trip.last_seen).getTime()  + 60000 : Date.now();
+        const ptRes  = await fetch(
+          `${apiUrl}/api/points?trip_id=${encodeURIComponent(trip.trip_id)}&from=${fromMs}&to=${toMs}`
+        );
+        const ptData = ptRes.ok ? await ptRes.json() : { points: [] };
+        const pts    = ptData.points || [];
+
+        rawCoords = pts.map(p => [p.lng, p.lat]).filter(c => c[0] && c[1]);
+
+        // Fallback to start point only
+        if (rawCoords.length === 0 && trip.start_lat && trip.start_lng) {
+          rawCoords = [[trip.start_lng, trip.start_lat]];
+        }
+
+        if (rawCoords.length >= 2) {
+          const matched = await matchTripToRoads(rawCoords);
+          finalActual = matched || rawCoords;
+
+          const startPt = rawCoords[0];
+          const endPt   = rawCoords[rawCoords.length - 1];
+          finalPlanned = await getPlannedRoute([startPt, endPt]);
+          if (!finalPlanned || finalPlanned.length < 2) finalPlanned = [startPt, endPt];
+        }
+      }
+
+      if (rawCoords.length < 2) {
+        setSelectedTrip(prev => prev?.trip_id === trip.trip_id
+          ? { ...prev, coords: rawCoords, osrmLoading: false }
+          : prev
+        );
+        return;
+      }
 
       let avoidanceRatio = 0;
-      if (finalActual && finalPlanned) {
-        const { overlapRatio } = computeH3Overlap(finalActual, finalPlanned, 10);
-        avoidanceRatio = Math.max(0, Math.min(100, Math.round((1 - overlapRatio) * 100)));
+      if (finalActual && finalPlanned && finalActual.length >= 2 && finalPlanned.length >= 2) {
+        // Use distance-based sampling (accurate for short & long trips alike).
+        // H3 cell overlap is unreliable for short trips (< 2 km) because
+        // H3-10 cells (~65m) can encompass both the detour and the direct path.
+        avoidanceRatio = computeAvoidanceRatio(finalActual, finalPlanned, 25);
       }
 
       setSelectedTrip(prev => prev?.trip_id === trip.trip_id
-        ? { ...prev, matchedRoute: finalActual, plannedRoute: finalPlanned, avoidanceRatio, osrmLoading: false }
+        ? { ...prev, coords: rawCoords, matchedRoute: finalActual, plannedRoute: finalPlanned, avoidanceRatio, osrmLoading: false }
         : prev
       );
     } catch (err) {
-      console.warn('OSRM trip lookup failed:', err);
+      console.warn('Trip detail lookup failed:', err);
       setSelectedTrip(prev => prev?.trip_id === trip.trip_id
         ? { ...prev, osrmLoading: false }
         : prev
       );
     }
   };
+
+
 
   // ── Active data slices ────────────────────────────────────────────────────
   const activePoints = mode === 'live' ? [] : points;
@@ -276,14 +327,26 @@ export default function App() {
             </div>
             <div>
               <div style={{ color: '#555', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>GPS Points</div>
-              <div style={{ color: '#e0e0ff', fontWeight: 700, fontSize: '13px' }}>{selectedTrip.point_count}</div>
-            </div>
-            <div>
-              <div style={{ color: '#555', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Avg Deviation</div>
-              <div style={{ color: '#ff6b35', fontWeight: 700, fontSize: '13px' }}>
-                {(selectedTrip.avg_deviation / 1000).toFixed(1)} km
+              <div style={{ color: '#e0e0ff', fontWeight: 700, fontSize: '13px' }}>
+                {selectedTrip.point_count || (selectedTrip.coords?.length ?? 0)}
               </div>
             </div>
+            {/* Show distance for simulator trips, avg deviation for Porto historical */}
+            {selectedTrip.distance_km != null ? (
+              <div>
+                <div style={{ color: '#555', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Quãng đường</div>
+                <div style={{ color: '#e0e0ff', fontWeight: 700, fontSize: '13px' }}>
+                  {selectedTrip.distance_km.toFixed(2)} km
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div style={{ color: '#555', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Avg Deviation</div>
+                <div style={{ color: '#ff6b35', fontWeight: 700, fontSize: '13px' }}>
+                  {selectedTrip.avg_deviation > 0 ? `${(selectedTrip.avg_deviation / 1000).toFixed(1)} km` : '—'}
+                </div>
+              </div>
+            )}
             <div>
               <div style={{ color: '#555', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Tỷ lệ né tránh</div>
               <div style={{

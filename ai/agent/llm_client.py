@@ -11,43 +11,45 @@ logger = logging.getLogger("ai_agent.llm_client")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-SYSTEM_PROMPT = """Bạn là Chuyên gia Phân tích Giao thông & Điều tra Hành vi Đội xe Chuyên nghiệp (AI Fleet Investigator Pro).
-Nhiệm vụ của bạn là nhận dữ liệu bằng chứng thực tế (Real-World Evidence) từ 6 NGUỒN BẰNG CHỨNG ĐÓNG GÓI:
-1. Viễn thông đội xe (Fleet Telemetry từ PostgreSQL - Đã làm mịn Bayes & Tính Khoảng Tin cậy Wilson 95%)
-2. Lịch sử & Thời tiết thực tế (Open-Meteo Historical Archive / Forecast API)
-3. Tin tức & Sự kiện giao thông địa phương (Google News RSS Feed & DuckDuckGo Search)
-4. Phân tích Lộ trình phụ OSRM (Alternative Route Analysis: Đường tắt tối ưu vs Rẽ lòng vòng)
-5. Hồ sơ Uy tín 30 ngày của Tài xế (Driver 30-day System-wide Compliance & Reputation)
-6. Mật độ & Giới hạn Tốc độ Pháp lý (Authoritative Speed Limit & Gridlock Ratio từ OpenStreetMap)
+SYSTEM_PROMPT = """Bạn là Hệ thống Phân tích Điểm nóng Giao thông — AI phân tích bất thường lộ trình.
 
-=== QUY TẮC NGUYÊN TẮC PHÂN LOẠI RỦI RO (RISK HIERARCHY - BẮT BUỘC THÂN THEO 100%) ===
+NHIỆM VỤ: Nhận dữ liệu bằng chứng thực tế từ một ô lưới H3 (khu vực ~100m²) và đưa ra phân tích LOGIC, DỄ HIỂU.
 
-1. KẾT LUẬN "SAFE_FORCE_MAJEURE" (🟢 An toàn - Bất khả kháng / Lộ trình tối ưu):
-   - KHI Mưa lớn >= 10mm/h HOẶC Tin tức có ghi nhận ngập lụt, sạt lở, tai nạn, cấm đường, thi công.
-   - HOẶC Giao thông kẹt xe nghiêm trọng (Sụt giảm vận tốc >= 65% so với giới hạn pháp lý).
-   - HOẶC Lộ trình OSRM thay thế là OPTIMIZED_SHORTCUT (Tiết kiệm thời gian di chuyển >60 giây).
-   - HOẶC Tỷ lệ đội xe cùng bẻ lái (Đã làm mịn Bayes) >= 50% VÀ Nhóm tài xế có uy tín khu vực tốt (Compliance >= 85%).
+=== NGUYÊN TẮC PHÂN LOẠI ===
 
-2. KẾT LUẬN "FRAUD_ALERT" (🔴 Cảnh báo Gian lận Cố ý):
-   - KHI Lộ trình OSRM thay thế là INFLATED_DETOUR (Tài xế rẽ lòng vòng kéo dài quãng đường >1.5km & tốn thêm thời gian bất hợp lý).
-   - HOẶC Tài xế/Nhóm tài xế có tỷ lệ vi phạm khu vực cao (Compliance < 70%, HIGH_RISK) VÀ Thời tiết ráo mát (<5mm/h), không kẹt xe, không sự kiện giao thông.
-   - Nếu OSRM_UNAVAILABLE: không được dùng OSRM để chứng minh FRAUD_ALERT. Dựa vào Telemetry, Weather, Driver Profile, Traffic.
+🟢 "SAFE_FORCE_MAJEURE" — Có nguyên nhân khách quan rõ ràng:
+   Mưa lớn ≥ 10mm/h, hoặc có tin tức sự kiện giao thông (ngập, tai nạn, thi công),
+   hoặc kẹt xe nghiêm trọng (tốc độ giảm ≥ 65%), hoặc OSRM xác nhận đường tắt tối ưu,
+   hoặc ≥ 50% đội xe cùng rẽ và uy tín nhóm tốt (≥ 85%).
 
-3. KẾT LUẬN "SUSPICIOUS" (🟡 Cần Theo dõi Nghi vấn):
-   - KHI Bẻ lái rải rác (15% - 50%), thời tiết & giao thông bình thường, chưa đủ bằng chứng kết luận bất khả kháng hay gian lận cố ý.
-   - HOẶC OSRM_UNAVAILABLE và không đủ bằng chứng từ 5 nguồn còn lại để kết luận chắc chắn.
+🔴 "FRAUD_ALERT" — Bất thường cao, không có yếu tố khách quan:
+   OSRM phát hiện rẽ lòng vòng (INFLATED_DETOUR), hoặc uy tín khu vực thấp (< 70%)
+   kết hợp tỷ lệ lệch ≥ 40%, trong điều kiện thời tiết tốt, giao thông thông thoáng.
 
-=== QUY TẮC XỬ LÝ MẪU ÍT & BIÊN ĐỘ SAI SỐ THỐNG KÊ (WILSON MARGIN OF ERROR) ===
-- Nếu Biên độ Sai số Thống kê (margin_of_error) > 0.25 (do số mẫu ít unique_trips < 5), AI BẮT BUỘC phải hạ độ tin cậy "confidence" xuống <= 0.75 và nêu rõ trong "summary": "Tỷ lệ bẻ lái đã được làm mịn Bayes (chỉ số adjusted_ratio) do cỡ mẫu nhỏ."
+🟡 "SUSPICIOUS" — Chưa đủ bằng chứng kết luận:
+   Tỷ lệ lệch ở mức trung bình (15-50%), không có yếu tố khách quan rõ ràng
+   nhưng cũng chưa đủ dấu hiệu gian lận cố ý.
 
-Yêu cầu output: Trả về BẮT BUỘC theo đúng định dạng JSON có cấu trúc sau:
+=== QUY TẮC VỀ MẪU NHỎ ===
+Nếu biên sai số (margin_of_error) > 0.25: confidence ≤ 0.75, ghi chú cỡ mẫu nhỏ.
+
+=== YÊU CẦU OUTPUT — JSON duy nhất ===
 {
   "risk_level": "SAFE_FORCE_MAJEURE" | "SUSPICIOUS" | "FRAUD_ALERT",
-  "confidence": 0.95,
-  "summary": "Tóm tắt chẩn đoán bằng tiếng Việt 2-3 câu chặt chẽ, trích dẫn đầy đủ số liệu chứng cứ.",
-  "recommendation": "Đề xuất hành động cụ thể cho Admin (ví dụ: 'Tạm thời bypass OSRM 2 giờ', 'Không phạt tài xế', hoặc 'Gửi cảnh báo kiểm tra tài xế và yêu cầu giải trình cước')."
+  "confidence": 0.0 → 1.0,
+  "observation": "1-2 câu MÔ TẢ hiện tượng: có bao nhiêu tài xế, tỷ lệ lệch tuyến bao nhiêu, khu vực nào.",
+  "context": "1-2 câu giải thích BỐI CẢNH: thời tiết, giao thông, có/không có sự kiện bất thường nào giải thích.",
+  "conclusion": "1 câu KẾT LUẬN ngắn gọn dựa trên bằng chứng. Không đưa đề xuất hành chính cụ thể vì đây là dữ liệu tổng hợp của NHIỀU tài xế, chưa thể xác định nguyên nhân chính xác từng người."
 }
+
+=== QUY TẮC VIẾT ===
+- Viết bằng tiếng Việt, ngắn gọn, dễ hiểu cho người quản lý đọc.
+- KHÔNG đề xuất hành động cụ thể như "phạt tài xế", "yêu cầu giải trình", "tạm ngưng thanh toán".
+  Vì khu vực có NHIỀU tài xế khác nhau, AI chỉ phân tích tổng thể, KHÔNG thể kết luận cho từng cá nhân.
+- Conclusion nên trung lập, khách quan, ví dụ: "Cần xem xét thêm dữ liệu cá nhân từng tài xế trước khi kết luận."
+- KHÔNG dùng từ "chứng cứ", "chứng minh" — dùng "dữ liệu cho thấy", "ghi nhận".
 """
+
 
 async def generate_diagnosis(h3_index: str, evidence: Evidence) -> DiagnosisResult:
     """
@@ -104,51 +106,63 @@ Thời điểm chuyến xe/sự kiện: {evidence.target_time_str}
    - Trạng thái giao thông: {traffic.traffic_state if traffic else 'CLEAR'}
 """
 
-    # Option 1: Call Groq API if GROQ_API_KEY is present (Ultra fast LLaMA 3.3 70B)
+    # Option 1: Call Groq API if GROQ_API_KEY is present
+    # Tries models in cascade order — if a model is deprecated/unavailable, falls through to next
     if GROQ_API_KEY:
-        for attempt in range(3):  # max 3 attempts for 429/503
-            try:
-                url = "https://api.groq.com/openai/v1/chat/completions"
-                headers = {
-                    "Authorization": f"Bearer {GROQ_API_KEY}",
-                    "Content-Type": "application/json",
-                }
-                payload = {
-                    "model": "llama-3.3-70b-versatile",
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "response_format": {"type": "json_object"},
-                    "temperature": 0.1,
-                }
+        groq_models = [
+            "openai/gpt-oss-120b",  # Preferred: highest quality available on this key
+            "openai/gpt-oss-20b",   # Fallback 1: faster, lighter
+            "qwen/qwen3.6-27b",     # Fallback 2: Qwen multilingual (supports Vietnamese)
+        ]
+        for model_id in groq_models:
+            for attempt in range(2):  # max 2 attempts per model for 429/503
+                try:
+                    url = "https://api.groq.com/openai/v1/chat/completions"
+                    headers = {
+                        "Authorization": f"Bearer {GROQ_API_KEY}",
+                        "Content-Type": "application/json",
+                    }
+                    payload = {
+                        "model": model_id,
+                        "messages": [
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.1,
+                    }
 
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.post(url, json=payload, headers=headers)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        content = data["choices"][0]["message"]["content"]
-                        result_json = json.loads(content)
-
-                        return DiagnosisResult(
-                            h3_index=h3_index,
-                            risk_level=result_json.get("risk_level", "SAFE_FORCE_MAJEURE"),
-                            confidence=float(result_json.get("confidence", 0.95)),
-                            summary=result_json.get("summary", "Đã phân tích bằng chứng thực tế qua Groq AI."),
-                            evidence=evidence,
-                            recommendation=result_json.get("recommendation", "Theo dõi khu vực."),
-                        )
-                    elif resp.status_code in (429, 503) and attempt < 2:
-                        wait_sec = 2 ** attempt  # 1s, 2s backoff
-                        logger.warning("[LLM Groq] HTTP %d rate-limit — retry %d/2 after %ds", resp.status_code, attempt + 1, wait_sec)
-                        await asyncio.sleep(wait_sec)
-                        continue
-                    else:
-                        logger.error("[LLM Groq] HTTP %d: %s", resp.status_code, resp.text[:200])
-                        break
-            except Exception as e:
-                logger.error("[LLM Groq] API call error on attempt %d: %s", attempt + 1, e)
-                break
+                    async with httpx.AsyncClient(timeout=25.0) as client:
+                        resp = await client.post(url, json=payload, headers=headers)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            content = data["choices"][0]["message"]["content"]
+                            result_json = json.loads(content)
+                            logger.info("[LLM Groq] Success with model: %s", model_id)
+                            return DiagnosisResult(
+                                h3_index=h3_index,
+                                risk_level=result_json.get("risk_level", "SAFE_FORCE_MAJEURE"),
+                                confidence=float(result_json.get("confidence", 0.95)),
+                                observation=result_json.get("observation", ""),
+                                context=result_json.get("context", ""),
+                                conclusion=result_json.get("conclusion", ""),
+                                evidence=evidence,
+                            )
+                        elif resp.status_code in (429, 503) and attempt < 1:
+                            wait_sec = 2 ** attempt
+                            logger.warning("[LLM Groq] %s: HTTP %d rate-limit — retry after %ds", model_id, resp.status_code, wait_sec)
+                            await asyncio.sleep(wait_sec)
+                            continue
+                        elif resp.status_code == 404:
+                            # Model deprecated or not found — try next model in cascade
+                            logger.warning("[LLM Groq] Model %s not found (404) — trying next model", model_id)
+                            break  # break attempt loop, continue outer groq_models loop
+                        else:
+                            logger.error("[LLM Groq] %s: HTTP %d: %s", model_id, resp.status_code, resp.text[:200])
+                            break
+                except Exception as e:
+                    logger.error("[LLM Groq] %s: API call error on attempt %d: %s", model_id, attempt + 1, e)
+                    break
 
     # Option 2: Attempt Gemini API call if GEMINI_API_KEY present
     if GEMINI_API_KEY:
@@ -158,7 +172,7 @@ Thời điểm chuyến xe/sự kiện: {evidence.target_time_str}
 
             client = genai.Client(api_key=GEMINI_API_KEY)
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.6-flash",
                 contents=[SYSTEM_PROMPT, user_prompt],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
@@ -172,9 +186,10 @@ Thời điểm chuyến xe/sự kiện: {evidence.target_time_str}
                     h3_index=h3_index,
                     risk_level=result_json.get("risk_level", "SAFE_FORCE_MAJEURE"),
                     confidence=float(result_json.get("confidence", 0.90)),
-                    summary=result_json.get("summary", "Đã phân tích bằng chứng thực tế qua Gemini AI."),
+                    observation=result_json.get("observation", ""),
+                    context=result_json.get("context", ""),
+                    conclusion=result_json.get("conclusion", ""),
                     evidence=evidence,
-                    recommendation=result_json.get("recommendation", "Theo dõi khu vực."),
                 )
         except Exception as e:
             logger.error("[LLM Gemini] API call error: %s", e)
@@ -190,50 +205,56 @@ def _rule_based_fallback(h3_index: str, evidence: Evidence) -> DiagnosisResult:
     osrm_alts = evidence.osrm_alternatives
     driver_prof = evidence.driver_profile
     traffic = evidence.traffic_speed
+    loc = evidence.location_name or "khu vực này"
 
     rain = weather.rain_mm if (weather and weather.rain_mm is not None) else 0.0
     ratio = telemetry.adjusted_deviation_ratio if telemetry.adjusted_deviation_ratio > 0 else telemetry.fleet_deviation_ratio
     has_news = len(news) > 0
     is_gridlock = traffic and traffic.traffic_state == "SEVERE_GRIDLOCK"
     is_shortcut = osrm_alts and osrm_alts.route_classification == "OPTIMIZED_SHORTCUT"
+    pct = round(ratio * 100, 1)
+
+    # Common observation
+    observation = f"Ghi nhận {telemetry.unique_drivers} tài xế đi qua {loc}, trong đó {pct}% chuyến lệch khỏi tuyến tiêu chuẩn ({telemetry.high_dev_trips}/{telemetry.unique_trips} chuyến)."
 
     if rain >= 10.0 or has_news or is_gridlock or is_shortcut:
         risk = "SAFE_FORCE_MAJEURE"
         conf = 0.95 if telemetry.margin_of_error <= 0.25 else 0.75
-        reasons = []
+        ctx_parts = []
         if rain >= 10.0:
-            reasons.append(f"mưa lớn ({rain}mm/h)")
-        if has_news:
-            reasons.append(f"tin tức giao thông '{news[0].title[:35]}...'")
+            ctx_parts.append(f"mưa lớn {rain}mm/h")
         if is_gridlock:
-            reasons.append(f"kẹt xe nghiêm trọng (tốc độ giảm {round((traffic.speed_drop_ratio if traffic else 0.8)*100)}%)")
+            drop = round((traffic.speed_drop_ratio if traffic else 0.8) * 100)
+            ctx_parts.append(f"kẹt xe nghiêm trọng (tốc độ giảm {drop}%)")
+        if has_news:
+            ctx_parts.append(f"có sự kiện giao thông được ghi nhận")
         if is_shortcut:
-            reasons.append("lộ trình rẽ là đường tắt tối ưu thời gian di chuyển hơn")
-
-        reason_str = ", ".join(reasons)
-        summary = f"Tài xế né tránh hợp lý tại {evidence.location_name} do {reason_str}."
-        rec = "Tạm thời cập nhật OSRM bypass đoạn đường này. KHÔNG phạt tài xế."
+            ctx_parts.append("tuyến rẽ được OSRM xác nhận là đường tắt tối ưu hơn")
+        context = f"Dữ liệu cho thấy có yếu tố khách quan: {', '.join(ctx_parts)}."
+        conclusion = "Việc lệch tuyến có nguyên nhân khách quan rõ ràng, phù hợp với điều kiện thực tế tại thời điểm đó."
     elif (osrm_alts and osrm_alts.route_classification == "INFLATED_DETOUR") or (
         driver_prof and driver_prof.reputation_level == "HIGH_RISK" and ratio >= 0.4
         and (not osrm_alts or osrm_alts.route_classification not in ("OPTIMIZED_SHORTCUT", "OSRM_UNAVAILABLE"))
     ):
         risk = "FRAUD_ALERT"
         conf = 0.92 if telemetry.margin_of_error <= 0.25 else 0.70
-        pct = round(ratio * 100, 1)
-        summary = f"Cảnh báo nghi vấn gian lận tại {evidence.location_name}: Phát hiện rẽ đường lòng vòng kéo dài quãng đường ({pct}% bẻ lái đã làm mịn) trong điều kiện giao thông khô ráo bình thường."
-        rec = "Gửi thông báo yêu cầu tài xế xác nhận lý do bẻ lái và kiểm tra cước chuyến đi."
+        weather_desc = weather.description if weather else "không rõ"
+        traffic_desc = "thông thoáng" if (not traffic or traffic.traffic_state == "CLEAR") else traffic.traffic_state
+        context = f"Thời tiết {weather_desc} ({rain}mm/h), giao thông {traffic_desc}. Không ghi nhận sự kiện bất thường nào giải thích cho mức lệch tuyến cao."
+        conclusion = f"Tỷ lệ lệch tuyến cao bất thường trong điều kiện bình thường. Tuy nhiên, đây là dữ liệu tổng hợp của {telemetry.unique_drivers} tài xế — cần xem xét từng trường hợp cụ thể."
     else:
         risk = "SUSPICIOUS"
         conf = 0.75 if telemetry.margin_of_error <= 0.25 else 0.60
-        pct = round(ratio * 100, 1)
-        summary = f"Ghi nhận {telemetry.high_dev_trips} chuyến bẻ lái ({pct}% đã làm mịn Bayes, biên sai số ±{round(telemetry.margin_of_error*100, 1)}%) tại {evidence.location_name}. Thời tiết và giao thông bình thường."
-        rec = "Theo dõi thêm biến động trong 30 phút tới."
+        weather_desc = weather.description if weather else "không rõ"
+        context = f"Thời tiết {weather_desc} ({rain}mm/h), giao thông bình thường. Chưa đủ dữ liệu để xác định rõ nguyên nhân."
+        conclusion = f"Mức lệch tuyến đáng chú ý nhưng chưa đủ dấu hiệu để kết luận. Cần theo dõi thêm xu hướng tại khu vực này."
 
     return DiagnosisResult(
         h3_index=h3_index,
         risk_level=risk,
         confidence=conf,
-        summary=summary,
+        observation=observation,
+        context=context,
+        conclusion=conclusion,
         evidence=evidence,
-        recommendation=rec,
     )

@@ -10,6 +10,17 @@ class InvestigateRequest(BaseModel):
     driver_id: Optional[str] = Field(default=None, description="Optional target driver ID")
     end_lat: Optional[float] = Field(default=None, description="Latitude of trip destination for OSRM route analysis")
     end_lng: Optional[float] = Field(default=None, description="Longitude of trip destination for OSRM route analysis")
+    # Exact bbox of the H3 cell as displayed in popup (from road-stats query)
+    min_lat: Optional[float] = Field(default=None, description="Bounding box min latitude")
+    max_lat: Optional[float] = Field(default=None, description="Bounding box max latitude")
+    min_lng: Optional[float] = Field(default=None, description="Bounding box min longitude")
+    max_lng: Optional[float] = Field(default=None, description="Bounding box max longitude")
+    # Live session stats shown in popup — primary source of truth for AI
+    session_drivers: Optional[int] = Field(default=None, description="Drivers seen in current session")
+    session_trips: Optional[int] = Field(default=None, description="Trips seen in current session")
+    session_high_dev_trips: Optional[int] = Field(default=None, description="High-deviation trips in session")
+    session_deviation_ratio: Optional[float] = Field(default=None, description="Deviation ratio 0-1 from session")
+    session_avg_deviation_m: Optional[float] = Field(default=None, description="Average deviation in meters from session")
 
 class WeatherEvidence(BaseModel):
     temperature: Optional[float] = None
@@ -70,8 +81,12 @@ class Evidence(BaseModel):
 
 class DiagnosisResult(BaseModel):
     h3_index: str
-    risk_level: str  # "SAFE_FORCE_MAJEURE" | "SUSPICIOUS" | "FRAUD_ALERT" | "ANALYSIS_UNAVAILABLE"
+    risk_level: str  # "SAFE_FORCE_MAJEURE" | "SUSPICIOUS" | "FRAUD_ALERT"
     confidence: float
-    summary: str
+    observation: str = ""   # What happened — drivers, deviation rate, area
+    context: str = ""       # Why it might have happened — weather, traffic, events
+    conclusion: str = ""    # Neutral conclusion
+    summary: str = ""       # Legacy: kept for backward compat, auto-composed if empty
     evidence: Evidence
-    recommendation: str
+    recommendation: str = ""  # Legacy: kept for backward compat
+

@@ -130,7 +130,7 @@ func (w *PostgresWriter) HandleH3Aggregate(wr http.ResponseWriter, r *http.Reque
 	}
 
 	// ── Build SQL query ─────────────────────────────────────────────────────
-	query := `SELECT latitude, longitude, deviation_meters, trip_id, driver_id
+	query := `SELECT latitude, longitude, deviation_meters, trip_id, driver_id, COALESCE(event_type, 'deviation')
 	          FROM deviation_events
 	          WHERE created_at >= $1 AND created_at <= $2`
 	args := []interface{}{fromTime, toTime}
@@ -181,8 +181,8 @@ func (w *PostgresWriter) HandleH3Aggregate(wr http.ResponseWriter, r *http.Reque
 
 	for rows.Next() {
 		var lat, lng, deviation float64
-		var tripID, drvID string
-		if err := rows.Scan(&lat, &lng, &deviation, &tripID, &drvID); err != nil {
+		var tripID, drvID, eventType string
+		if err := rows.Scan(&lat, &lng, &deviation, &tripID, &drvID, &eventType); err != nil {
 			continue
 		}
 		totalProcessed++
@@ -209,7 +209,17 @@ func (w *PostgresWriter) HandleH3Aggregate(wr http.ResponseWriter, r *http.Reque
 			tripID = fmt.Sprintf("anon-%d-%d", int(lat*1000), int(lng*1000))
 		}
 		acc.tripsSet[tripID] = struct{}{}
-		if deviation > 150 {
+
+		// Threshold for bẻ lái / né tránh (High Deviation Detour):
+		// - For Simulator ('actual_path'): urban roads are tight, >25m off plan is a detour.
+		// - For Porto ('deviation'): highway/city GPS tracking noise is ~50-150m; true avoidance detour is >150m.
+		isAvoid := false
+		if eventType == "actual_path" {
+			isAvoid = deviation > 25
+		} else {
+			isAvoid = deviation > 150
+		}
+		if isAvoid {
 			acc.avoidSet[tripID] = struct{}{}
 		}
 		if drvID != "" {

@@ -138,131 +138,202 @@ def compute_bayesian_smoothed_ratio(k: int, n: int, p0: float = 0.05, c: float =
     return round(adjusted, 3)
 
 async def query_telemetry(
-    h3_index: str, lat: float, lng: float, time_window_minutes: int = 0, timestamp_ms: Optional[int] = None
+    h3_index: str, lat: float, lng: float, time_window_minutes: int = 0, timestamp_ms: Optional[int] = None,
+    bbox_min_lat: Optional[float] = None, bbox_max_lat: Optional[float] = None,
+    bbox_min_lng: Optional[float] = None, bbox_max_lng: Optional[float] = None,
 ) -> TelemetryEvidence:
     """
     Query PostgreSQL/PostGIS for exact deviation telemetry of all drivers in the H3 cell or vicinity.
     Uses Scientific 3-Tier Road Width Engine, AASHTO Threshold Formula, Bayesian Smoothing, and 95% Wilson Confidence Bounds.
+    When an explicit bbox is provided (from frontend road-stats query), use it directly to match popup data scope exactly.
     """
-    delta_lat = 0.0015
-    delta_lng = 0.0015
-    min_lat, max_lat = lat - delta_lat, lat + delta_lat
-    min_lng, max_lng = lng - delta_lng, lng + delta_lng
+    # Use frontend-provided bbox if available (matches popup's road-stats scope exactly)
+    if bbox_min_lat is not None and bbox_max_lat is not None and bbox_min_lng is not None and bbox_max_lng is not None:
+        min_lat, max_lat = bbox_min_lat, bbox_max_lat
+        min_lng, max_lng = bbox_min_lng, bbox_max_lng
+    else:
+        delta_lat = 0.0005
+        delta_lng = 0.0005
+        min_lat, max_lat = lat - delta_lat, lat + delta_lat
+        min_lng, max_lng = lng - delta_lng, lng + delta_lng
 
     # Fetch dynamic deviation threshold using Scientific 3-Tier Road Width Engine
     threshold_m, _ = await fetch_road_class_threshold(lat, lng)
 
+    # Only use exact h3_index match when it's an H8 server-format cell (what the DB actually stores).
+    # H13/H14 frontend cells and raw hex strings don't exist in DB → fall back to bounding box.
+    use_exact_h3 = h3_index and h3_index.startswith("H8:")
+
+
     # 1. Query with specific timestamp window if timestamp_ms is provided
     if timestamp_ms and timestamp_ms > 0:
         dt = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
-        query_timestamp = """
+
+        if use_exact_h3:
+            # Exact H3 cell match — no bounding box expansion
+            query_timestamp = """
+                SELECT
+                    COUNT(*)::INT AS total_events,
+                    COUNT(DISTINCT driver_id)::INT AS unique_drivers,
+                    COUNT(DISTINCT trip_id)::INT AS unique_trips,
+                    COALESCE(ROUND(AVG(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS avg_deviation,
+                    COALESCE(ROUND(MAX(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS max_deviation,
+                    COUNT(DISTINCT CASE WHEN deviation_meters > $3 THEN trip_id END)::INT AS high_dev_trips,
+                    COALESCE(ROUND(AVG(speed_kmh)::NUMERIC, 1), 0)::FLOAT8 AS avg_speed
+                FROM deviation_events
+                WHERE h3_index = $1
+                  AND created_at BETWEEN ($2::TIMESTAMPTZ - INTERVAL '24 hours') AND ($2::TIMESTAMPTZ + INTERVAL '24 hours');
+            """
+            try:
+                conn = await asyncpg.connect(POSTGRES_DSN, timeout=3.0)
+                try:
+                    row = await conn.fetchrow(query_timestamp, h3_index, dt, threshold_m)
+                    if row and (row["total_events"] or 0) > 0:
+                        return _build_telemetry(row, threshold_m)
+                finally:
+                    await conn.close()
+            except Exception as e:
+                print(f"[Tool: DB Telemetry Exact H3 Error] {e}")
+        else:
+            # Bounding box fallback when h3_index is not specific
+            query_timestamp = """
+                SELECT
+                    COUNT(*)::INT AS total_events,
+                    COUNT(DISTINCT driver_id)::INT AS unique_drivers,
+                    COUNT(DISTINCT trip_id)::INT AS unique_trips,
+                    COALESCE(ROUND(AVG(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS avg_deviation,
+                    COALESCE(ROUND(MAX(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS max_deviation,
+                    COUNT(DISTINCT CASE WHEN deviation_meters > $7 THEN trip_id END)::INT AS high_dev_trips,
+                    COALESCE(ROUND(AVG(speed_kmh)::NUMERIC, 1), 0)::FLOAT8 AS avg_speed
+                FROM deviation_events
+                WHERE latitude BETWEEN $2 AND $3 AND longitude BETWEEN $4 AND $5
+                  AND created_at BETWEEN ($6::TIMESTAMPTZ - INTERVAL '24 hours') AND ($6::TIMESTAMPTZ + INTERVAL '24 hours');
+            """
+            try:
+                conn = await asyncpg.connect(POSTGRES_DSN, timeout=3.0)
+                try:
+                    row = await conn.fetchrow(query_timestamp, h3_index, min_lat, max_lat, min_lng, max_lng, dt, threshold_m)
+                    if row and (row["total_events"] or 0) > 0:
+                        return _build_telemetry(row, threshold_m)
+                finally:
+                    await conn.close()
+            except Exception as e:
+                print(f"[Tool: DB Telemetry BBox Error] {e}")
+
+    # 2. Fallback: Query with time_window_minutes if > 0 (Live mode)
+    if use_exact_h3:
+        query_with_time = """
             SELECT
                 COUNT(*)::INT AS total_events,
                 COUNT(DISTINCT driver_id)::INT AS unique_drivers,
                 COUNT(DISTINCT trip_id)::INT AS unique_trips,
                 COALESCE(ROUND(AVG(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS avg_deviation,
                 COALESCE(ROUND(MAX(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS max_deviation,
-                COUNT(DISTINCT CASE WHEN deviation_meters > $7 THEN trip_id END)::INT AS high_dev_trips,
+                COUNT(DISTINCT CASE WHEN deviation_meters > $3 THEN trip_id END)::INT AS high_dev_trips,
                 COALESCE(ROUND(AVG(speed_kmh)::NUMERIC, 1), 0)::FLOAT8 AS avg_speed
             FROM deviation_events
-            WHERE (h3_index = $1 OR (latitude BETWEEN $2 AND $3 AND longitude BETWEEN $4 AND $5))
-              AND created_at BETWEEN ($6::TIMESTAMPTZ - INTERVAL '24 hours') AND ($6::TIMESTAMPTZ + INTERVAL '24 hours');
+            WHERE h3_index = $1
+              AND created_at >= NOW() - ($2 || ' minutes')::INTERVAL;
         """
+
+        query_all_history = """
+            SELECT
+                COUNT(*)::INT AS total_events,
+                COUNT(DISTINCT driver_id)::INT AS unique_drivers,
+                COUNT(DISTINCT trip_id)::INT AS unique_trips,
+                COALESCE(ROUND(AVG(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS avg_deviation,
+                COALESCE(ROUND(MAX(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS max_deviation,
+                COUNT(DISTINCT CASE WHEN deviation_meters > $2 THEN trip_id END)::INT AS high_dev_trips,
+                COALESCE(ROUND(AVG(speed_kmh)::NUMERIC, 1), 0)::FLOAT8 AS avg_speed
+            FROM deviation_events
+            WHERE h3_index = $1;
+        """
+
         try:
             conn = await asyncpg.connect(POSTGRES_DSN, timeout=3.0)
             try:
-                row = await conn.fetchrow(query_timestamp, h3_index, min_lat, max_lat, min_lng, max_lng, dt, threshold_m)
+                row = None
+                if time_window_minutes > 0:
+                    row = await conn.fetchrow(query_with_time, h3_index, str(time_window_minutes), threshold_m)
+
+                if not row or (row["total_events"] or 0) == 0:
+                    row = await conn.fetchrow(query_all_history, h3_index, threshold_m)
+
                 if row and (row["total_events"] or 0) > 0:
-                    unique_trips = row["unique_trips"] or 0
-                    high_dev_trips = row["high_dev_trips"] or 0
-                    raw_ratio = float(high_dev_trips) / float(unique_trips) if unique_trips > 0 else 0.0
-
-                    adj_ratio = compute_bayesian_smoothed_ratio(high_dev_trips, unique_trips)
-                    lower_w, upper_w, margin_w = compute_wilson_interval(high_dev_trips, unique_trips)
-
-                    return TelemetryEvidence(
-                        total_events=row["total_events"] or 0,
-                        unique_drivers=row["unique_drivers"] or 0,
-                        unique_trips=unique_trips,
-                        high_dev_trips=high_dev_trips,
-                        fleet_deviation_ratio=round(raw_ratio, 3),
-                        adjusted_deviation_ratio=adj_ratio,
-                        wilson_lower_bound=lower_w,
-                        wilson_upper_bound=upper_w,
-                        margin_of_error=margin_w,
-                        dynamic_threshold_m=threshold_m,
-                        avg_speed_kmh=row["avg_speed"] or 0.0,
-                        avg_deviation_m=row["avg_deviation"] or 0.0,
-                    )
+                    return _build_telemetry(row, threshold_m)
             finally:
                 await conn.close()
         except Exception as e:
-            print(f"[Tool: DB Telemetry Timestamp Error] {e}")
+            print(f"[Tool: DB Telemetry Error] {e}")
+    else:
+        # Bounding box fallback for non-specific h3_index
+        query_with_time = """
+            SELECT
+                COUNT(*)::INT AS total_events,
+                COUNT(DISTINCT driver_id)::INT AS unique_drivers,
+                COUNT(DISTINCT trip_id)::INT AS unique_trips,
+                COALESCE(ROUND(AVG(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS avg_deviation,
+                COALESCE(ROUND(MAX(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS max_deviation,
+                COUNT(DISTINCT CASE WHEN deviation_meters > $6 THEN trip_id END)::INT AS high_dev_trips,
+                COALESCE(ROUND(AVG(speed_kmh)::NUMERIC, 1), 0)::FLOAT8 AS avg_speed
+            FROM deviation_events
+            WHERE latitude BETWEEN $1 AND $2 AND longitude BETWEEN $3 AND $4
+              AND created_at >= NOW() - ($5 || ' minutes')::INTERVAL;
+        """
 
-    # 2. Query with time_window_minutes if > 0 (Live mode)
-    query_with_time = """
-        SELECT
-            COUNT(*)::INT AS total_events,
-            COUNT(DISTINCT driver_id)::INT AS unique_drivers,
-            COUNT(DISTINCT trip_id)::INT AS unique_trips,
-            COALESCE(ROUND(AVG(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS avg_deviation,
-            COALESCE(ROUND(MAX(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS max_deviation,
-            COUNT(DISTINCT CASE WHEN deviation_meters > $7 THEN trip_id END)::INT AS high_dev_trips,
-            COALESCE(ROUND(AVG(speed_kmh)::NUMERIC, 1), 0)::FLOAT8 AS avg_speed
-        FROM deviation_events
-        WHERE (h3_index = $1 OR (latitude BETWEEN $2 AND $3 AND longitude BETWEEN $4 AND $5))
-          AND created_at >= NOW() - ($6 || ' minutes')::INTERVAL;
-    """
+        query_all_history = """
+            SELECT
+                COUNT(*)::INT AS total_events,
+                COUNT(DISTINCT driver_id)::INT AS unique_drivers,
+                COUNT(DISTINCT trip_id)::INT AS unique_trips,
+                COALESCE(ROUND(AVG(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS avg_deviation,
+                COALESCE(ROUND(MAX(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS max_deviation,
+                COUNT(DISTINCT CASE WHEN deviation_meters > $5 THEN trip_id END)::INT AS high_dev_trips,
+                COALESCE(ROUND(AVG(speed_kmh)::NUMERIC, 1), 0)::FLOAT8 AS avg_speed
+            FROM deviation_events
+            WHERE latitude BETWEEN $1 AND $2 AND longitude BETWEEN $3 AND $4;
+        """
 
-    # 3. Query full history for the cell/location
-    query_all_history = """
-        SELECT
-            COUNT(*)::INT AS total_events,
-            COUNT(DISTINCT driver_id)::INT AS unique_drivers,
-            COUNT(DISTINCT trip_id)::INT AS unique_trips,
-            COALESCE(ROUND(AVG(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS avg_deviation,
-            COALESCE(ROUND(MAX(deviation_meters)::NUMERIC, 1), 0)::FLOAT8 AS max_deviation,
-            COUNT(DISTINCT CASE WHEN deviation_meters > $6 THEN trip_id END)::INT AS high_dev_trips,
-            COALESCE(ROUND(AVG(speed_kmh)::NUMERIC, 1), 0)::FLOAT8 AS avg_speed
-        FROM deviation_events
-        WHERE (h3_index = $1 OR (latitude BETWEEN $2 AND $3 AND longitude BETWEEN $4 AND $5));
-    """
-
-    try:
-        conn = await asyncpg.connect(POSTGRES_DSN, timeout=3.0)
         try:
-            row = None
-            if time_window_minutes > 0:
-                row = await conn.fetchrow(query_with_time, h3_index, min_lat, max_lat, min_lng, max_lng, str(time_window_minutes), threshold_m)
+            conn = await asyncpg.connect(POSTGRES_DSN, timeout=3.0)
+            try:
+                row = None
+                if time_window_minutes > 0:
+                    row = await conn.fetchrow(query_with_time, min_lat, max_lat, min_lng, max_lng, str(time_window_minutes), threshold_m)
 
-            if not row or (row["total_events"] or 0) == 0:
-                row = await conn.fetchrow(query_all_history, h3_index, min_lat, max_lat, min_lng, max_lng, threshold_m)
+                if not row or (row["total_events"] or 0) == 0:
+                    row = await conn.fetchrow(query_all_history, min_lat, max_lat, min_lng, max_lng, threshold_m)
 
-            if row and (row["total_events"] or 0) > 0:
-                unique_trips = row["unique_trips"] or 0
-                high_dev_trips = row["high_dev_trips"] or 0
-                raw_ratio = float(high_dev_trips) / float(unique_trips) if unique_trips > 0 else 0.0
-
-                adj_ratio = compute_bayesian_smoothed_ratio(high_dev_trips, unique_trips)
-                lower_w, upper_w, margin_w = compute_wilson_interval(high_dev_trips, unique_trips)
-
-                return TelemetryEvidence(
-                    total_events=row["total_events"] or 0,
-                    unique_drivers=row["unique_drivers"] or 0,
-                    unique_trips=unique_trips,
-                    high_dev_trips=high_dev_trips,
-                    fleet_deviation_ratio=round(raw_ratio, 3),
-                    adjusted_deviation_ratio=adj_ratio,
-                    wilson_lower_bound=lower_w,
-                    wilson_upper_bound=upper_w,
-                    margin_of_error=margin_w,
-                    dynamic_threshold_m=threshold_m,
-                    avg_speed_kmh=row["avg_speed"] or 0.0,
-                    avg_deviation_m=row["avg_deviation"] or 0.0,
-                )
-        finally:
-            await conn.close()
-    except Exception as e:
-        print(f"[Tool: DB Telemetry Error] {e}")
+                if row and (row["total_events"] or 0) > 0:
+                    return _build_telemetry(row, threshold_m)
+            finally:
+                await conn.close()
+        except Exception as e:
+            print(f"[Tool: DB Telemetry BBox Error] {e}")
 
     return TelemetryEvidence(dynamic_threshold_m=threshold_m)
+
+
+def _build_telemetry(row, threshold_m: float) -> TelemetryEvidence:
+    """Build TelemetryEvidence from a database row."""
+    unique_trips = row["unique_trips"] or 0
+    high_dev_trips = row["high_dev_trips"] or 0
+    raw_ratio = float(high_dev_trips) / float(unique_trips) if unique_trips > 0 else 0.0
+
+    adj_ratio = compute_bayesian_smoothed_ratio(high_dev_trips, unique_trips)
+    lower_w, upper_w, margin_w = compute_wilson_interval(high_dev_trips, unique_trips)
+
+    return TelemetryEvidence(
+        total_events=row["total_events"] or 0,
+        unique_drivers=row["unique_drivers"] or 0,
+        unique_trips=unique_trips,
+        high_dev_trips=high_dev_trips,
+        fleet_deviation_ratio=round(raw_ratio, 3),
+        adjusted_deviation_ratio=adj_ratio,
+        wilson_lower_bound=lower_w,
+        wilson_upper_bound=upper_w,
+        margin_of_error=margin_w,
+        dynamic_threshold_m=threshold_m,
+        avg_speed_kmh=row["avg_speed"] or 0.0,
+        avg_deviation_m=row["avg_deviation"] or 0.0,
+    )

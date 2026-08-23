@@ -84,31 +84,158 @@ export async function fetchOSRMRoute(origin, destination) {
   };
 }
 
-// Match-snap user drawn waypoints to actual road network via OSRM Match API
+// Match-snap user drawn waypoints to actual road network via OSRM Match API.
+// Uses chunking (≤10 pts per request per public server limit), radiuses=40m,
+// and synthetic timestamps so the HMM algorithm works correctly.
 export async function matchRouteOSRM(waypoints) {
   if (!waypoints || waypoints.length < 2) return waypoints || [];
 
   const osrmBase = import.meta.env.VITE_OSRM_URL || 'https://router.project-osrm.org';
-  const samplePts = waypoints.length > 80 
-    ? waypoints.filter((_, idx) => idx % Math.ceil(waypoints.length / 80) === 0)
-    : waypoints;
 
-  const coordsStr = samplePts.map(w => `${w[0]},${w[1]}`).join(';');
-  const url = `${osrmBase}/match/v1/driving/${coordsStr}?overview=full&geometries=geojson`;
-
-  try {
-    const res = await fetch(url);
-    if (res.ok) {
-      const data = await res.json();
-      if (data.matchings && data.matchings.length > 0) {
-        return data.matchings.flatMap(m => m.geometry.coordinates);
-      }
-    }
-  } catch (err) {
-    console.warn('[OSRM Match Error]', err);
+  // Sample to ≤100 points while ALWAYS keeping first and last
+  let pts = waypoints;
+  if (pts.length > 100) {
+    const step = (pts.length - 1) / 98;
+    const sampled = [pts[0]];
+    for (let i = 1; i < 99; i++) sampled.push(pts[Math.round(i * step)]);
+    sampled.push(pts[pts.length - 1]);
+    pts = sampled;
   }
-  return waypoints;
+
+  // Snap first & last point to nearest road (hand-drawn endpoints are rarely exact)
+  async function snapNearest(coord) {
+    try {
+      const r = await fetch(
+        `${osrmBase}/nearest/v1/driving/${coord[0].toFixed(6)},${coord[1].toFixed(6)}?number=1`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (r.ok) {
+        const d = await r.json();
+        if (d.code === 'Ok' && d.waypoints?.length) return d.waypoints[0].location;
+      }
+    } catch (_) { /* ignore */ }
+    return coord;
+  }
+  pts[0] = await snapNearest(pts[0]);
+  pts[pts.length - 1] = await snapNearest(pts[pts.length - 1]);
+
+  // Chunk into groups of ≤10 with 2-point overlap (public OSRM server limit)
+  const CHUNK = 10, OVERLAP = 2;
+  const chunks = [];
+  for (let i = 0; i < pts.length; i += CHUNK - OVERLAP) {
+    const end = Math.min(i + CHUNK, pts.length);
+    chunks.push(pts.slice(i, end));
+    if (end >= pts.length) break;
+  }
+
+  async function matchChunk(coords) {
+    const coordsStr  = coords.map(c => `${c[0].toFixed(6)},${c[1].toFixed(6)}`).join(';');
+    // radius=40m: wide enough for hand-drawn points ~10-30m off road
+    const radiusStr  = coords.map(() => '40').join(';');
+    // synthetic timestamps: 5s per point (short trip interval for simulator)
+    const tsStr      = coords.map((_, i) => i * 5).join(';');
+    const url = `${osrmBase}/match/v1/driving/${coordsStr}`
+      + `?overview=full&geometries=geojson`
+      + `&radiuses=${radiusStr}`
+      + `&timestamps=${tsStr}`
+      + `&tidy=true&gaps=ignore`;
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data.code !== 'Ok' || !data.matchings?.length) return null;
+      // Merge all matchings (gaps=ignore may produce multiple)
+      return data.matchings.flatMap((m, i) => i === 0 ? m.geometry.coordinates : m.geometry.coordinates.slice(1));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Fallback: simple route between two endpoints
+  async function routePair(a, b) {
+    try {
+      const url = `${osrmBase}/route/v1/driving/${a[0].toFixed(6)},${a[1].toFixed(6)};${b[0].toFixed(6)},${b[1].toFixed(6)}?overview=full&geometries=geojson`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.code === 'Ok' ? data.routes[0].geometry.coordinates : null;
+    } catch (_) { return null; }
+  }
+
+  const segments = [];
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const matched = await matchChunk(chunks[ci]);
+    if (matched && matched.length >= 2) {
+      segments.push(matched);
+    } else {
+      // fallback: just route start→end of this chunk
+      const fb = await routePair(chunks[ci][0], chunks[ci][chunks[ci].length - 1]);
+      if (fb) segments.push(fb);
+    }
+    // Throttle between chunks
+    if (ci < chunks.length - 1) await new Promise(r => setTimeout(r, 150));
+  }
+
+  if (segments.length === 0) return waypoints;
+
+  // Stitch segments (skip OVERLAP coords at start of each subsequent segment)
+  let merged = [...segments[0]];
+  for (let i = 1; i < segments.length; i++) {
+    const seg = segments[i];
+    const skip = Math.min(OVERLAP, Math.floor(seg.length * 0.15));
+    merged.push(...seg.slice(skip));
+  }
+
+  // ── Ensure exact start/end anchoring ──────────────────────────────────────
+  // OSRM /match snaps GPS to road centerlines; the returned start/end coords
+  // may differ slightly from pts[0] / pts[last] (both already road-snapped).
+  //
+  // Strategy: route a connector from snapStart → merged[0] and from
+  // merged[last] → snapEnd, then splice it in. If connector fails or is
+  // trivially short (< 10m), just force-replace the endpoint directly.
+  const snapStart = pts[0];
+  const snapEnd   = pts[pts.length - 1];
+
+  function distM(a, b) {
+    const dx = (b[0] - a[0]) * 111320 * Math.cos(a[1] * Math.PI / 180);
+    const dy = (b[1] - a[1]) * 111320;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  const gapStart = distM(snapStart, merged[0]);
+  const gapEnd   = distM(snapEnd, merged[merged.length - 1]);
+
+  if (gapStart > 5) {
+    if (gapStart < 80) {
+      // Small gap: just prepend the snap point — no extra route needed
+      merged = [snapStart, ...merged];
+    } else {
+      // Larger gap: route a proper connector
+      const conn = await routePair(snapStart, merged[0]);
+      merged = conn && conn.length >= 2
+        ? [...conn.slice(0, -1), ...merged]
+        : [snapStart, ...merged];
+    }
+  }
+
+  if (gapEnd > 5) {
+    if (gapEnd < 80) {
+      merged = [...merged, snapEnd];
+    } else {
+      const lastPt = merged[merged.length - 1];
+      const conn = await routePair(lastPt, snapEnd);
+      merged = conn && conn.length >= 2
+        ? [...merged, ...conn.slice(1)]
+        : [...merged, snapEnd];
+    }
+  }
+  // ──────────────────────────────────────────────────────────────────────────
+
+  return merged.length >= 2 ? merged : waypoints;
 }
+
+
+
 
 // Generate actual route with realistic driver deviations/detours
 export function generateActualRoute(plannedCoords, deviationPercent = 30) {
